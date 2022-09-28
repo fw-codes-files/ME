@@ -1,0 +1,34 @@
+[tool.poetry]
+name = "camera_synchronous"
+license = "MIT"
+version = "0.1.3"
+readme = "README.md"
+description = "多相机同步"
+authors = ["flyinghu <1152598046@qq.com>"]
+keywords = ["camera", "synchronous", "Azure-Kinect"]
+packages = [
+    { include = "pykinect_azure" },
+    { include = "camera_synchronous" }
+]
+
+[tool.poetry.scripts]
+syn_demo = 'camera_synchronous.examples.demo:run'
+
+[tool.poetry.dependencies]
+python = ">=3.7,<3.10"
+numpy = "^1.21.0"
+opencv-python = "^4.5.5"
+open3d = "^0.15.1"
+pillow = "^9.1.1"
+
+[tool.poetry.dev-dependencies]
+pytest = "^7.1.2"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[[tool.poetry.source]]
+name = "aliyun"
+url = "https://mirrors.aliyun.com/pypi/simple/"
+default = true

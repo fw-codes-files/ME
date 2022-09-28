@@ -1,0 +1,47 @@
+3DDFA_faceBox_device: 'gpu'
+3DDFA_arch: 'mobilenet' # MobileNet V1
+3DDFA_widen_factor: 1.0
+3DDFA_checkpoint_fp: 'weights/mb1_120x120.pth'
+3DDFA_bfm_fp: 'weights/bfm_noneck_v3.pkl' # or configs/bfm_noneck_v3_slim.pkl
+3DDFA_size: 120
+3DDFA_num_params: 62
+3DDFA_dense: True
+
+PCA_weight: 'weights/pca.m'
+
+Dataset_10fold: 'dataset/CK+_10fold_samples.txt'
+CK+_data_root: 'E:/cohn-kanade-images/'
+CK+_dict:
+  0: 'Happy'
+  1: 'Angry'
+  2: 'Disgust'
+  3: 'Fear'
+  4: 'Sad'
+  5: 'Contempt'
+  6: 'Surprise'
+  Happy: 0
+  Angry: 1
+  Disgust: 2
+  Fear: 3
+  Sad: 4
+  Contempt: 5
+  Surprise: 6
+CK+_split: 500
+
+CONV_bs: 128
+CONV_seed: 0
+CONV_pth: './weights/best_checkpoint.tar'
+
+FAN_type: 'self_relation-attention'
+FAN_checkpoint: './weights/self_relation-attention_1_90.9091'
+
+LSTM_input_dim: 716
+LSTM_hidden_dim: 256
+LSTM_output_dim: 7
+LSTM_layerNum: 1
+LSTM_cell: 'LSTM'
+use_cuda: True
+
+batch_size: 16
+learning_rate: 1e-1
+window_size: 9

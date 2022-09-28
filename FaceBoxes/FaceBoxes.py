@@ -1,0 +1,172 @@
+# coding: utf-8
+
+import os.path as osp
+
+import numpy
+import torch
+import numpy as np
+import cv2
+
+from .utils.prior_box import PriorBox
+from .utils.nms_wrapper import nms
+from .utils.box_utils import decode
+from .utils.timer import Timer
+from .utils.functions import check_keys, remove_prefix, load_model
+from .utils.config import cfg
+from .models.faceboxes import FaceBoxesNet
+
+# some global configs
+confidence_threshold = 0.05
+top_k = 5000
+keep_top_k = 750
+nms_threshold = 0.3
+vis_thres = 0.5
+resize = 1
+
+scale_flag = True
+HEIGHT, WIDTH = 720, 1080
+
+make_abs_path = lambda fn: osp.join(osp.dirname(osp.realpath(__file__)), fn)
+pretrained_path = make_abs_path('weights/FaceBoxesProd.pth')
+
+
+def viz_bbox(img, dets, wfp='out.jpg'):
+    # show
+    for b in dets:
+        if b[4] < vis_thres:
+            continue
+        text = "{:.4f}".format(b[4])
+        b = list(map(int, b))
+        cv2.rectangle(img, (b[0], b[1]), (b[2], b[3]), (0, 0, 255), 2)
+        cx = b[0]
+        cy = b[1] + 12
+        cv2.putText(img, text, (cx, cy), cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 255, 255))
+    cv2.imwrite(wfp, img)
+    print(f'Viz bbox to {wfp}')
+
+
+class FaceBoxes:
+    def __init__(self, timer_flag=False):
+        torch.set_grad_enabled(False)
+
+        net = FaceBoxesNet(phase='test', size=None, num_classes=2)  # initialize detector
+        self.net = load_model(net, pretrained_path=pretrained_path, load_to_cpu=True)
+        self.net.eval()
+        # print('Finished loading model!')
+
+        self.timer_flag = timer_flag
+
+    def __call__(self, img_):
+        img_raw = img_.copy()
+        # scaling to speed up
+        scale = 1
+        if scale_flag:
+            h, w = img_raw.shape[1:3]
+            if h > HEIGHT:
+                scale = HEIGHT / h
+            if w * scale > WIDTH:
+                scale *= WIDTH / (w * scale)
+            # print(scale)
+            if scale == 1:
+                img_raw_scale = img_raw
+                img = np.float32(img_raw_scale)
+            else:
+                h_s = int(scale * h)
+                w_s = int(scale * w)
+                # print(h_s, w_s)
+                img_scle_ = []
+
+                for bs in range(img_raw.shape[0]):
+                    img_scle_.append(cv2.resize(img_raw[bs], dsize=(w_s, h_s)))
+                img = np.float32(img_scle_)
+        else:
+            img = img_raw
+
+        # forward
+        _t = {'forward_pass': Timer(), 'misc': Timer()}
+        _, im_height, im_width, _ = img.shape
+        scale_bbox = torch.Tensor([img.shape[2], img.shape[1], img.shape[2], img.shape[1]])
+        img -= (104, 117, 123)
+        img = img.transpose(0, 3, 1, 2)
+        img = torch.from_numpy(img)
+
+        _t['forward_pass'].tic()
+        loc, conf = self.net(img)  # forward pass
+        _t['forward_pass'].toc()
+        _t['misc'].tic()
+        priorbox = PriorBox(image_size=(im_height, im_width))
+        priors = priorbox.forward()
+        prior_data = priors.data
+        boxes = decode(loc.data, prior_data.unsqueeze(0), cfg['variance'])
+        if scale_flag:
+            boxes = boxes * scale_bbox / scale / resize
+        else:
+            boxes = boxes * scale_bbox / resize
+
+        boxes = boxes.cpu().numpy()
+        scores = conf.data.cpu().numpy()[:, :, 1]
+        # ignore low scores
+        inds = np.where(scores > confidence_threshold)
+        boxes_new, score_new = [], []
+        for L in range(len(scores)):
+            L_list = []
+            for idx in range(inds[0].shape[0]):
+                if inds[0][idx] == L:  # 说明是第L张图的第idx个索引
+                    L_list.append(inds[1][idx])
+            L_indx = np.array(L_list)
+            boxes_new.append(boxes[L, L_indx])
+            score_new.append(scores[L, L_indx])
+        boxes = np.array(boxes_new,dtype=object)
+        scores = np.array(score_new,dtype=object)
+
+        # keep top-K before NMS
+        bs_det_bboxes = []
+        for s in range(scores.shape[0]):
+            order = scores[s].argsort()[::-1][:top_k]
+            boxes[s] = boxes[s][order]
+            scores[s] = scores[s][order]
+            dets = np.concatenate((boxes[s], scores[s][:, np.newaxis]),axis=1).astype(np.float32, copy=False)
+            # do NMS
+            keep = nms(dets, nms_threshold)
+            dets = dets[keep, :]
+
+            dets = dets[:keep_top_k, :]
+            _t['misc'].toc()
+
+            if self.timer_flag:
+                print('Detection: {:d}/{:d} forward_pass_time: {:.4f}s misc: {:.4f}s'.format(1, 1, _t[
+                    'forward_pass'].average_time, _t['misc'].average_time))
+
+            # filter using vis_thres
+            det_bboxes = []
+            for b in dets:
+                if b[4] > vis_thres:
+                    xmin, ymin, xmax, ymax, score = b[0], b[1], b[2], b[3], b[4]
+                    bbox = [xmin, ymin, xmax, ymax, score]
+                    det_bboxes.append(bbox)
+            bs_det_bboxes.append(det_bboxes)
+        return bs_det_bboxes
+
+
+def main():
+    face_boxes = FaceBoxes(timer_flag=True)
+
+    fn = 'trump_hillary.jpg'
+    img_fp = f'../examples/inputs/{fn}'
+    img = cv2.imread(img_fp)
+    print(f'input shape: {img.shape}')
+    dets = face_boxes(img)  # xmin, ymin, w, h
+    # print(dets)
+
+    # repeating inference for `n` times
+    n = 10
+    for i in range(n):
+        dets = face_boxes(img)
+
+    wfn = fn.replace('.jpg', '_det.jpg')
+    wfp = osp.join('../examples/results', wfn)
+    viz_bbox(img, dets, wfp)
+
+
+if __name__ == '__main__':
+    main()
