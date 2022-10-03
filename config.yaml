@@ -33,15 +33,18 @@ CONV_seed: 0
 CONV_pth: './weights/best_checkpoint.tar'
 
 FAN_type: 'self_relation-attention'
-FAN_checkpoint: './weights/self_relation-attention_1_90.9091'
+FAN_checkpoint: './weights/Resnet18_FER+_pytorch.pth.tar'
+
+Least_frame: 15
+Max_frame: 40
 
 LSTM_input_dim: 716
-LSTM_hidden_dim: 256
+LSTM_hidden_dim: 1024
 LSTM_output_dim: 7
 LSTM_layerNum: 1
 LSTM_cell: 'LSTM'
 use_cuda: True
 
-batch_size: 16
-learning_rate: 1e-1
-window_size: 9
+batch_size: 32
+learning_rate: 1e-6
+window_size: 25

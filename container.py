@@ -30,7 +30,12 @@ class Models(object):
         self.Res_model.cuda()
         self.FAN = model.resnet18_at(at_type=config['FAN_type'])
         self.FAN.eval()
-        self.FAN.load_state_dict(torch.load(config['FAN_checkpoint'])['state_dict'])
+        pretrained_state_dict = torch.load(config['FAN_checkpoint'])['state_dict']
+        for key in pretrained_state_dict:
+            if ((key == 'module.fc.weight') | (key == 'module.fc.bias')):
+                pass
+            else:
+                self.FAN.state_dict()[key.replace('module.', '')] = pretrained_state_dict[key]
         self.FAN.cuda()
         self.LSTM_model = LSTMModel(inputDim=config['LSTM_input_dim'], hiddenNum=config['LSTM_hidden_dim'],
                                     outputDim=config['LSTM_output_dim'], layerNum=config['LSTM_layerNum'],
@@ -55,13 +60,13 @@ if __name__ == '__main__':
     from dataProcess import Utils
     import open3d as o3d
     # 连续显示点云
-    # imgs = os.listdir('E:/cohn-kanade-images/S005/001/')
+    # imgs = os.listdir('E:/cohn-kanade-images/S099/001/')
     # vis = o3d.visualization.Visualizer()
     # vis.create_window()
     # pcd = o3d.geometry.PointCloud()
     # vis.add_geometry(pcd)
     # for im in imgs:
-    img0 = cv2.imread(f'E:/cohn-kanade-images/S005/001/S005_001_00000001.png')
+    img0 = cv2.imread(f'E:/cohn-kanade-images/S099/001/{im}')
     img1 = cv2.imread('./test1.jpg')
     # img0 = img0[200:800, 1500:2200, :]  # 两个img大小一样
     # img1 = img1[480:1080, 300:1000, :]
@@ -102,7 +107,7 @@ if __name__ == '__main__':
         # pcd_dense.points = o3d.utility.Vector3dVector(ver_dense[0].T)
         # pcd_dense.colors = o3d.utility.Vector3dVector(colors)
         # pcd_dense.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
-        # o3d.visualization.draw_geometries([pcd])
+        # # o3d.visualization.draw_geometries([pcd])
         # vis.add_geometry(pcd)
         # vis.poll_events()
         # vis.update_renderer()
