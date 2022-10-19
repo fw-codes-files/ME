@@ -91,7 +91,64 @@ def drawNormal():
     from matplotlib import pyplot as plt
     plt.hist(rs,15000)
     plt.show()
+def testModelParams():
+    checkpoint = torch.load('./weights/self_relation-attention_fold_12_90.9091')
+    FAN_state_dict = checkpoint['state_dict']
+    print(FAN_state_dict.keys())
+def testAverage():
+    a = [0] * 10
+    for j in range(10):
+        for i in range(99):
+            a[j] = i
+    print(sum(a) / len(a))
+def testImageValue():
+    from PIL import Image
+    import torchvision.transforms as transforms
+    import cv2
+    img = Image.open('E:/cohn-kanade-images/S130/007/S130_007_00000001.png').convert('RGB')
+    mat = transforms.Compose([transforms.ToTensor()])
+    mimg = mat(img)
+    print(mimg[0][0][0])
+    img0 = cv2.imread('E:/cohn-kanade-images/S130/007/S130_007_00000001.png')
+    img1 = np.swapaxes(img0, 0, 2)
+    img2 = np.swapaxes(img1, 1, 2)
+    print(img2[0][0][0] / 255)
+def testprint():
+    print('a{b:.4f} ({b:.4f})'.format(b=2,c=3))
 
+def testsqueeze():
+    a=np.zeros((1,3))
+    b=np.zeros((2,3))
+    c=np.zeros((3,3))
+    d = np.array([a,b,c], dtype=object)
+    e = np.concatenate(d,axis=0)
+    print(e.shape)
+def teststep():
+    a = [i for i in range(25)]
+    b = [0]*25
+    c = []
+    e = [a]*2
+    for l in range(len(e)):
+        for st in range(3):
+            d = []
+            for i in range(st, 25, 3):
+                d.append(e[l][i])
+            c.append(d)
+            print(len(d))
+    print(c)
+def testlist():
+    a = [1,2,3]
+    a.append(a[-1])
+    print(a)
+def testmul():
+    import torch.nn as nn
+    a = torch.ones((2,25,204))
+    c = nn.Linear(204,1)
+    print(c(a).shape)
+def testadd():
+    a = torch.ones((8,25,1))
+    b = torch.ones((8,25,460))
+    print(torch.mul(a, b).shape)
 if __name__ == '__main__':
-    testtile()
+    testadd()
     pass

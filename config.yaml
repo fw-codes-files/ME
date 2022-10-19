@@ -1,3 +1,4 @@
+# face bounding box, point could and 3d landmarks config
 3DDFA_faceBox_device: 'gpu'
 3DDFA_arch: 'mobilenet' # MobileNet V1
 3DDFA_widen_factor: 1.0
@@ -7,8 +8,9 @@
 3DDFA_num_params: 62
 3DDFA_dense: True
 
-PCA_weight: 'weights/pca.m'
-
+PC_points_piars: 200
+PC_points_sample_range: 38365
+# CK+ dataset config
 Dataset_10fold: 'dataset/CK+_10fold_samples.txt'
 CK+_data_root: 'E:/cohn-kanade-images/'
 CK+_dict:
@@ -27,24 +29,42 @@ CK+_dict:
   Contempt: 5
   Surprise: 6
 CK+_split: 500
-
+# fer2013 convolution config, forsaken
 CONV_bs: 128
 CONV_seed: 0
 CONV_pth: './weights/best_checkpoint.tar'
-
+# emotion-FAN convolution config, being used
 FAN_type: 'self_relation-attention'
 FAN_checkpoint: './weights/Resnet18_FER+_pytorch.pth.tar'
-
+FAN_evey_fold_checkpoint:
+  1: './weights/self_relation-attention_fold_12_90.9091'
+  2: './weights/self_relation-attention_fold_228_92.3077'
+  3: './weights/self_relation-attention_fold_312_97.5'
+  4: './weights/self_relation-attention_fold_45_88.5714'
+  5: './weights/self_relation-attention_fold_52_96.6667'
+  6: './weights/self_relation-attention_fold_615_100.0'
+  7: './weights/self_relation-attention_fold_79_96.5517'
+  8: './weights/self_relation-attention_fold_813_100.0'
+  9: './weights/self_relation-attention_fold_92_100.0'
+  10: './weights/self_relation-attention_fold_1027_90.9091'
+# PCA config
+PCA_dim: 64
+PCA_dir: './weights/pca.m'
+# data sample strategy config
 Least_frame: 15
 Max_frame: 40
-
-LSTM_input_dim: 716
-LSTM_hidden_dim: 1024
+window_size: 25
+Sample_frequency: 1
+# LSTM config
+LSTM_input_dim: 204
+LSTM_hidden_dim: 512
 LSTM_output_dim: 7
 LSTM_layerNum: 1
 LSTM_cell: 'LSTM'
+# model config
 use_cuda: True
-
-batch_size: 32
+batch_size: 8
 learning_rate: 1e-6
-window_size: 25
+
+# log information config
+LOG_CHECK: '!!!Attention: 3dlms, fast fold!!!'

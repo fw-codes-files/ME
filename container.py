@@ -16,8 +16,8 @@ config = yaml.safe_load(open('./config.yaml'))
 
 
 class Models(object):
-    def __init__(self, train: bool = False):
-        # facebbox→resnet→PCA→LSTM→classification
+    def __init__(self, train: bool = False, fold:int = 1):
+        # faceboex→FAN→lstm
         self.tddfa = TDDFA(**config)  # 有transform，可能要改掉
         self.face_boxes = FaceBoxes()
         self.nums = [0, 17, 22, 27, 31, 36, 42, 48, 60, 68]
@@ -28,9 +28,9 @@ class Models(object):
         self.Res_chechpoint = torch.load(config['CONV_pth'])
         self.Res_model.load_state_dict(self.Res_chechpoint['model_state_dict'])
         self.Res_model.cuda()
-        self.FAN = model.resnet18_at(at_type=config['FAN_type'])
+        self.FAN = resnet18_at(at_type=config['FAN_type'])
         self.FAN.eval()
-        pretrained_state_dict = torch.load(config['FAN_checkpoint'])['state_dict']
+        pretrained_state_dict = torch.load(config['FAN_evey_fold_checkpoint'][fold])['state_dict']
         for key in pretrained_state_dict:
             if ((key == 'module.fc.weight') | (key == 'module.fc.bias')):
                 pass
@@ -66,7 +66,7 @@ if __name__ == '__main__':
     # pcd = o3d.geometry.PointCloud()
     # vis.add_geometry(pcd)
     # for im in imgs:
-    img0 = cv2.imread(f'E:/cohn-kanade-images/S099/001/{im}')
+    img0 = cv2.imread(f'E:/cohn-kanade-images/S099/001/dfadsffffffff')
     img1 = cv2.imread('./test1.jpg')
     # img0 = img0[200:800, 1500:2200, :]  # 两个img大小一样
     # img1 = img1[480:1080, 300:1000, :]
@@ -81,6 +81,7 @@ if __name__ == '__main__':
     print(f'detect {n} faces')
     param_lst, roi_box_lst, boxed_imgs, deltaxty_lst = t.tddfa(img, boxes)
     ver_dense, ver_lst = t.tddfa.recon_vers(param_lst, list(chain(*roi_box_lst)), dense_flag=config['3DDFA_dense'])
+
     height, width = img.shape[1:3]
     if not type(ver_lst) in [tuple, list]:
         ver_lst = [ver_lst]

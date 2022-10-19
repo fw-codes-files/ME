@@ -52,8 +52,12 @@ class LSTMModel(BaseModel):
 
     def __init__(self, inputDim, hiddenNum, outputDim, layerNum, cell, use_cuda):
         super(LSTMModel, self).__init__(inputDim, hiddenNum, outputDim, layerNum, cell, use_cuda)
+        self.alpha = nn.Sequential(nn.Linear(inputDim, 1),nn.Sigmoid()) # act on single frame
+        self.beta = nn.Sequential(nn.Linear(inputDim + hiddenNum, 1), nn.Sigmoid()) # act on single sample
+        self.lastL = nn.Linear(inputDim + hiddenNum, 7)
 
     def forward(self, x):
+        # x shape (bs, seq_len, input_dim)
         batchSize = x.size(0)
         h0 = Variable(torch.zeros(self.layerNum * 1, batchSize, self.hiddenNum))
         c0 = Variable(torch.zeros(self.layerNum * 1, batchSize, self.hiddenNum))
@@ -61,10 +65,17 @@ class LSTMModel(BaseModel):
             h0 = h0.cuda()
             c0 = c0.cuda()
         rnnOutput, hn = self.cell(x, (h0, c0))
-        hn = hn[0][-1].view(batchSize, self.hiddenNum)
-        fcOutput = self.fc(hn)
-
-        return fcOutput
+        hn = hn[0][-1].view(batchSize, 1, self.hiddenNum)
+        # fcOutput = self.fc(hn)
+        alphas = self.alpha(x) # (bs, seq_len, 1) frame level
+        hns = torch.tile(hn, (1, x.size(1), 1)) # (bs, seq_len, hiddenNum)
+        aggregation = torch.cat((x, hns), dim=2) # (bs, seq_len, hiddenNum + inputDim)
+        betas = self.beta(aggregation) # (bs, seq_len, 1)
+        alpha_betas = torch.mul(alphas, betas) # (bs, seq_len, 1)
+        weighted_sum = torch.sum(torch.mul(alpha_betas, aggregation), dim=1) # (bs, hiddenNum + inputDim)
+        features = weighted_sum / torch.sum(alpha_betas, dim=1) # (bs, hiddenNum + inputDim)
+        output = self.lastL(features)
+        return output
 
 
 class BasicBlock(nn.Module):
@@ -331,19 +342,7 @@ class ResNet_AT(nn.Module):
                 assert self.at_type == 'self_relation-attention'
                 vms = index_matrix.permute(1, 0).mm(vm)  # [381, 21783] -> [21783,381] * [381,512] --> [21783, 512]
                 vs_cate = torch.cat([vectors, vms], dim=1)
-
-                betas = self.beta(self.dropout(vs_cate))
-                ''' keywords: mean_fc ; weight_sourcefc; sum_alpha; weightmean_sourcefc '''
-                ''' alpha * beta '''
-                weight_catefc = vs_cate.mul(alphas_from1)  # [21570,512] * [21570,1] --->[21570,512]
-                alpha_beta = alphas_from1.mul(betas)
-                sum_alphabetas = index_matrix.mm(alpha_beta)  # [380,21570] * [21570,1] -> [380,1]
-                weightmean_catefc = index_matrix.mm(weight_catefc).div(sum_alphabetas)
-
-                weightmean_catefc = self.dropout2(weightmean_catefc)
-                pred_score = self.pred_fc2(weightmean_catefc)
-
-                return pred_score
+                return vs_cate
 
             if AT_level == 'pred':
                 if self.at_type == 'self-attention':
