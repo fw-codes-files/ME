@@ -61,10 +61,25 @@ LSTM_hidden_dim: 512
 LSTM_output_dim: 7
 LSTM_layerNum: 1
 LSTM_cell: 'LSTM'
+# Tansformer config
+T_block_num: 6
+T_head_num: 8
+T_forward_dim: 2048
+T_activation: 'gelu'
+T_output_dim: 7
+T_bs_first: True
+# AE config
+AE_noi_percent: 0.15
+AE_train_percent: 0.7
+AE_loss_train: './tb/loss/AE/train/'
+AE_loss_test: './tb/loss/AE/test/'
 # model config
 use_cuda: True
 batch_size: 8
 learning_rate: 1e-6
 
+
 # log information config
-LOG_CHECK: '!!!Attention: 3dlms, fast fold!!!'
+LOG_CHECK: '!!!Attention: 3dlms, fast fold, forward dim 2048,input embedding,MLP[cls],8 head, learnable PE, gelu, 2000 epoch for overfitting!!!'
+#LOG_CHECK: '!!!AE: 3dlms, all ck+ dataset , check net!!!'
+LOG_pth: 'train.log'

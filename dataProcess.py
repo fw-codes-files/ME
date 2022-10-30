@@ -1,5 +1,6 @@
 import logging
 import random
+import time
 
 import numpy as np
 import cv2
@@ -165,6 +166,34 @@ class Utils():
             return f, alpha, ver_lst, np_label, pc
 
     @classmethod
+    def loadAllCKPlus(cls, pth, t):
+        img = cv2.imread(pth)
+        img = img.reshape(1, img.shape[0], img.shape[1], 3)
+        with torch.no_grad():
+            boxes = t.face_boxes(img)  # (bs, faces)
+            param_lst, roi_box_lst, boxed_imgs, deltaxty_lst = t.tddfa(img,
+                                                                       boxes)  # param_lst(faces(62 = 12 + 40 +10))  roi_box_lst(bs,faces) boxed_imgs(faces) deltaxty_lst(bs, faces)
+            ver_dense, ver_lst = t.tddfa.recon_vers(param_lst, list(chain(*roi_box_lst)),
+                                                    dense_flag=config['3DDFA_dense'])  # ver_dense(faces) ver_lst(faces)
+            if not type(ver_lst) in [tuple, list]:
+                ver_lst = [ver_lst]
+            img_bs_num = len(roi_box_lst)
+            for ibn in range(img_bs_num):
+                # pc和lms一同摆正
+                T = viz_pose(param_lst)
+                pc = ver_dense[0].T  # 这里可能有坑,索引应该怎么写？
+                pc = pc @ T[:3, :3].T + T[:3, 3].T
+                ver_lst[ibn] = T[:3, :3] @ ver_lst[ibn] + T[:3, 3].reshape(-1, 1)
+                ver_lst[ibn] -= pc[0].T.reshape(-1, 1)
+                pc -= pc[0]
+                # lms和pc应该贴在一起
+                # import open3d as o3d
+                # pcd = o3d.geometry.PointCloud()
+                # pcd.points = o3d.utility.Vector3dVector(ver_lst[ibn].T)
+                # o3d.visualization.draw_geometries([pcd])
+        return ver_lst[ibn],pc
+
+    @classmethod
     def insertMethod(cls, ori_data, delta, inverse: bool = False):
         '''
             video which contains less than sequence length is going to filled with EOS symbol
@@ -251,10 +280,53 @@ class Utils():
         import open3d as o3d
         pcd_s = o3d.geometry.PointCloud()
         pcd_pc = o3d.geometry.PointCloud()
-        pcd_s.points = o3d.utility.Vector3dVector(ver_lst[0].T)
+        if type(ver_lst) == list:
+            pcd_s.points = o3d.utility.Vector3dVector(ver_lst[0].T)
+        else:
+            pcd_s.points = o3d.utility.Vector3dVector(ver_lst.T)
         pcd_pc.points = o3d.utility.Vector3dVector(np.vstack((pc,sPC)))
         o3d.visualization.draw_geometries([pcd_s,pcd_pc])
 
+    @classmethod
+    def injectNoiseInput(cls,input, percent):
+        '''
+            args:
+                percent: how many percent of input will be injected noise
+            return:
+                noisy input
+        '''
+        length = input.shape[0]
+        noi_lst = random.sample([i for i in range(length)], int(length*percent))
+        for n in noi_lst:
+            raw_lms_frame = input[n].copy()
+            how_many_point = np.random.randint(1, high=69)
+            lms_idx = random.sample([i for i in range(68)], how_many_point)
+            for l in lms_idx:
+                value_times = random.sample([10, 100, 1000], 1)
+                noi_xyz = np.random.random((1, 3)) * value_times
+                raw_lms_frame[l] = noi_xyz
+            input[n] = raw_lms_frame.copy()
+        return input
+
+    @classmethod
+    def solveICPBySVD(cls, p0, p1):
+        """svd求解3d-3d的Rt, $p_0 = Rp_1 + t$
+        Args:
+          p0 (np.ndarray): nx3
+          p1 (np.ndarray): nx3
+        Returns:
+          R (np.ndarray): 3x3
+          t (np.ndarray): 3x1
+        """
+        p0c = p0.mean(axis=0, keepdims=True)  # 质心
+        p1c = p1.mean(axis=0, keepdims=True)  # 1, 3
+        q0 = p0 - p0c
+        q1 = p1 - p1c  # n x 3
+        W = q0.T @ q1  # 3x3
+        U, _, VT = np.linalg.svd(W)
+        R = U @ VT  # $UV^T$
+        t = p0c.T - R @ p1c.T
+        return R, t
 class Dataprocess():
     def __init__(self):
         pass
@@ -288,6 +360,7 @@ class Dataprocess():
                 for i in img:
                     if i.endswith('DS_Store'):
                         os.remove(os.path.join(img_pth, i))
+
     @classmethod
     def loadCKPlusData(cls, test_fold):
         import tqdm
@@ -368,10 +441,13 @@ class Dataprocess():
             rate = np.median(rates)
             ver_lst[0] *= rate
             pc *= rate
+            r, Tt = Utils.solveICPBySVD(p0=sPC, p1=pc)
+            newpc = r @ pc.T + Tt
+            newlms = r @ ver_lst[0] + Tt
             # lms pc standardPC 都在一起
             # Utils.open3dVerify(ver_lst,pc,sPC)
             # with open(f'./dataset/3dlms_fold{test_fold}_train.txt', 'ab') as n3d:
-            #     np.savetxt(n3d, ver_lst[0].T)
+            #     np.savetxt(n3d, newlms.T)
             # with open(f'./dataset/label_fold{test_fold}_train.txt', 'ab') as nl:
             #     np.savetxt(nl, np_label)
         Utils.aggregateFeaAndCode(fi_lst,alphi_lst,split_train,test_fold,'train')
@@ -389,17 +465,21 @@ class Dataprocess():
             rate = np.median(rates)
             ver_lst[0] *= rate
             pc *= rate
+            r, Tt = Utils.solveICPBySVD(p0=sPC, p1=pc)
+            newpc = r @ pc.T + Tt
+            newlms = r @ ver_lst[0] + Tt
             # with open(f'./dataset/3dlms_fold{test_fold}_test.txt', 'ab') as n3d:
-            #     np.savetxt(n3d, ver_lst[0].T)
+            #     np.savetxt(n3d, newlms.T)
             # with open(f'./dataset/label_fold{test_fold}_test.txt', 'ab') as nl:
             #     np.savetxt(nl, np_label)
         Utils.aggregateFeaAndCode(fi_lst, alphi_lst, split_test, test_fold,'test')
-        # for fms in tqdm.tqdm(split_train):
-        #     with open(f'./dataset/split_{test_fold}_train.txt', 'ab') as nfn:
-        #         np.savetxt(nfn, np.array(fms).reshape([1, -1]))
-        # for fms in tqdm.tqdm(split_test):
-        #     with open(f'./dataset/split_{test_fold}_test.txt', 'ab') as nfn:
-        #         np.savetxt(nfn, np.array(fms).reshape([1, -1]))
+        for fms in tqdm.tqdm(split_train):
+            with open(f'./dataset/split_{test_fold}_train.txt', 'ab') as nfn:
+                np.savetxt(nfn, np.array(fms).reshape([1, -1]))
+        for fms in tqdm.tqdm(split_test):
+            with open(f'./dataset/split_{test_fold}_test.txt', 'ab') as nfn:
+                np.savetxt(nfn, np.array(fms).reshape([1, -1]))
+
     @classmethod
     def dataForLSTM(cls, fold, crop: bool = False):
         '''
@@ -432,6 +512,7 @@ class Dataprocess():
             return train_l, train_feature, train_lms3d, train_seqs, test_l, test_feature, test_lms3d, test_seqs
         else:
             return label_train, train, lms3d_train, split_train, label_test, test, lms3d_test, split_test
+
     @classmethod
     def pca(cls, ori_data, seqs, flag):
         '''
@@ -459,6 +540,7 @@ class Dataprocess():
             pca_lst.append(pca_data[idx:idx+s])
             idx += s
         return np.array(pca_lst, dtype=object)
+
     @classmethod
     def dataAlign2WindowSize(cls, ws, feature, lms3d, label, step:int = 1):
         '''
@@ -482,12 +564,12 @@ class Dataprocess():
             # f_std = np.std(feature[f][:,:512], axis=1)
             # feature[f][:,:512] = (feature[f][:,:512] - f_mean.reshape(-1, 1)) / f_std.reshape(-1, 1)
 
-            l_mean = np.mean(lms3d[f], axis=1)
-            l_std = np.std(lms3d[f], axis=1)
-            lms3d[f] = (lms3d[f] - l_mean.reshape(-1, 1)) / l_std.reshape(-1, 1)
+            # l_mean = np.mean(lms3d[f], axis=1)
+            # l_std = np.std(lms3d[f], axis=1)
+            # lms3d[f] = (lms3d[f] - l_mean.reshape(-1, 1)) / l_std.reshape(-1, 1)
 
             # concatnate and align to ws -- video level
-            # ori_video = np.hstack((feature[f], lms3d[f]))
+            # ori_video = np.hstack((feature[f][:,512:], lms3d[f]))
             ori_video = lms3d[f]
             if ori_video.shape[0] < ws:
                 # EOS
@@ -508,6 +590,76 @@ class Dataprocess():
         dataloader = torch.utils.data.DataLoader(dataset, shuffle=True, batch_size=config['batch_size'])
         return dataloader
 
+    @classmethod
+    def AEinput(cls, path):
+        '''
+            load all CK+ dataset
+            args:
+                path: ck+ picture
+        '''
+        rs_total = np.zeros((0,3))
+        t = Models(False, 1) # whatever second parameter is, just use 3DDFA, for now.
+        sPC = Utils.standardPC(t)
+        random_idx = random.sample([i for i in range(config['PC_points_sample_range'])], config['PC_points_piars'])
+        s_dir_lst = os.listdir(path)
+        for s_dir in s_dir_lst:
+            num_lst = os.listdir(os.path.join(path,s_dir))
+            for n in num_lst:
+                pic_lst = os.listdir(os.path.join(path,s_dir,n))
+                for p in pic_lst:
+                    img_pth = os.path.join(path,s_dir,n,p)
+                    rs,pc = Utils.loadAllCKPlus(img_pth,t)
+                    standard_idx = sPC[random_idx]
+                    standard_distance = np.linalg.norm(
+                        standard_idx[:int(config['PC_points_piars'] / 2)] - standard_idx[int(config['PC_points_piars'] / 2):],
+                        axis=1)
+                    vari_idx = pc[random_idx]
+                    vari_distance = np.linalg.norm(
+                        vari_idx[:int(config['PC_points_piars'] / 2)] - vari_idx[int(config['PC_points_piars'] / 2):], axis=1)
+                    rates = standard_distance / vari_distance
+                    rate = np.median(rates)
+                    rs *= rate
+                    rs_total = np.concatenate((rs_total,rs.T),axis=0)
+        noisy_rs = rs_total.reshape((-1, 68, 3))
+        noisy_rs = Utils.injectNoiseInput(noisy_rs,config['AE_noi_percent'])
+        to_writ = noisy_rs.reshape((-1, 204))
+        np.savetxt('./dataset/AE_3dlms.txt', to_writ)
+        print('数据保存完毕')
+
+    @classmethod
+    def AEdataload(cls):
+        noisy_rs = np.loadtxt('./dataset/AE_3dlms.txt')
+        dataset = LSTMDataSet(torch.from_numpy(np.array(noisy_rs, dtype=np.float32)).cuda(),
+                              torch.from_numpy(np.array(noisy_rs, dtype=np.float32)).cuda())
+        train_division = int(dataset.input.shape[0] * config['AE_train_percent'])
+        test_division = dataset.input.shape[0] - train_division
+        train_dataloader = torch.utils.data.DataLoader(dataset[:train_division], shuffle=True,
+                                                       batch_size=config['batch_size'])
+        test_dataloader = torch.utils.data.DataLoader(dataset[test_division:], shuffle=True,
+                                                      batch_size=config['batch_size'])
+        return train_dataloader, test_dataloader
+
+    @classmethod
+    def AE_feeature(cls):
+        # from model import AutoEncoder
+        # checkpoint = torch.load('./weights/AE_model/AE_model_6000.pth')
+        # ae = AutoEncoder()
+        # ae.load_state_dict(checkpoint)
+        # ae.eval()
+        lms3d_train = np.loadtxt(f'./dataset/AE_3dlms.txt')
+        # verify by open3d
+        lms3d = lms3d_train.reshape((-1,68,3))
+        import open3d as o3d
+        pcd_s = o3d.geometry.PointCloud()
+        vis = o3d.visualization.Visualizer()
+        vis.create_window()
+        for l in range(lms3d.shape[0]):
+            pcd_s.points = o3d.utility.Vector3dVector(lms3d[l])
+            pcd_s.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
+            vis.add_geometry(pcd_s)
+            vis.poll_events()
+            vis.update_renderer()
+            time.sleep(1)
 if __name__ == '__main__':
     # 高清视频社区的素材
     # Dataprocess.datasetProcess('E:/lstm_data4train')
@@ -533,4 +685,8 @@ if __name__ == '__main__':
     # for f in range(1,11):
     #     t = Models(f)
     #     Utils.deep_features('./test.jpg', 1, t, 'fan')
+    # unit test of 3d lms of all CK+
+    # Dataprocess.AEinput('E:/cohn-kanade-images/')
+    # verify lms
+    Dataprocess.AE_feeature()
     pass

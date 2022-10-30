@@ -1,3 +1,5 @@
+import random
+
 import numpy as np
 import torch
 
@@ -149,6 +151,140 @@ def testadd():
     a = torch.ones((8,25,1))
     b = torch.ones((8,25,460))
     print(torch.mul(a, b).shape)
+def testencoder():
+    import torch.nn as nn
+    encoder_layer = nn.TransformerEncoderLayer(d_model=256, nhead=8, batch_first=True)
+    src = torch.rand(32, 10, 256)
+    out = encoder_layer(src)
+    print(out.shape)
+def testclstoken():
+    import torch.nn as nn
+    cls = nn.Parameter(torch.randn(1, 1, 5))
+    x = torch.ones((8,25,204))
+    print(torch.tile(cls,(8,1,1)).shape)
+def testbroadcast():
+    from torch.autograd import Variable
+    a = torch.ones((1,26,204))
+    b = torch.zeros((8,26,204))
+    c = b + Variable(a[:,:b.size(1)],requires_grad=False)
+    print(c)
+def testtensorboard():
+    from torch.utils.tensorboard import SummaryWriter
+    w = SummaryWriter('./loss/')
+    for i in range(100):
+        a = torch.tensor(1,dtype=torch.float32)
+        w.add_scalar('loss',a,i)
+def testsincos():
+    pe = torch.arange(0, 26).unsqueeze(1)
+    print(pe[:, 0::2])
+    print(pe[:, 1::2])
+def testsoftmax():
+    a = torch.arange(20,dtype=torch.float32).reshape((4,5))
+    c = torch.arange(20,dtype=torch.float32).reshape((4,5))
+    b = torch.arange(20,dtype=torch.float32).reshape((5,4))
+    d = torch.mm(a,b)
+    s = torch.nn.Softmax(dim=0)
+    e = s(d)
+    print(e)
+    print(torch.mm(e,c))
+def testtype():
+    a = []
+    print(type(a)==list)
+def testnprandom():
+    a = random.sample([i for i in range(17)], 12)
+    print(type(a))
+def testdim():
+    a = np.zeros((2,3,4))
+    b = np.ones((3,4))
+    a[0] = b
+    print(a)
+def testdataset():
+    from dataProcess import LSTMDataSet
+    a = torch.zeros((3,4,5))
+    b = torch.zeros((3,4,5))
+    dataset =  LSTMDataSet(a,b)
+    train = dataset[:2]
+    test = dataset[2]
+    print(dataset.input.shape[0])
+def testo3dicp():
+    import open3d as o3d
+
+    threshold = 0.2  # 距离阈值
+    trans_init = np.array([[1.0, 0.0, 0.0, 0.0],
+                           [0.0, 1.0, 0.0, 0.0],
+                           [0.0, 0.0, 1.0, 0],
+                           [0.0, 0.0, 0.0, 1.0]])
+    # 计算两个重要指标，fitness计算重叠区域（内点对应关系/目标点数）。越高越好。
+    # inlier_rmse计算所有内在对应关系的均方根误差RMSE。越低越好。
+    source = o3d.geometry.PointCloud()
+    source.points = o3d.utility.Vector3dVector(points1)
+    target = o3d.geometry.PointCloud()
+    target.points = o3d.utility.Vector3dVector(points2)
+    print("Initial alignment")
+    print(source)
+    icp = o3d.pipelines.registration.registration_icp(
+        source, target, threshold, trans_init,
+        o3d.pipelines.registration.TransformationEstimationPointToPoint())
+    print(icp)
+    source.transform(icp.transformation)
+    print(icp.transformation)
+def solveICPBySVD(p0, p1):
+  """svd求解3d-3d的Rt, $p_0 = Rp_1 + t$
+  Args:
+    p0 (np.ndarray): nx3
+    p1 (np.ndarray): nx3
+  Returns:
+    R (np.ndarray): 3x3
+    t (np.ndarray): 3x1
+  """
+  p0c = p0.mean(axis=0, keepdims=True) # 质心
+  p1c = p1.mean(axis=0, keepdims=True) # 1, 3
+  q0 = p0 - p0c
+  q1 = p1 - p1c # n x 3
+  W = q0.T @ q1 # 3x3
+  U, _, VT = np.linalg.svd(W)
+  R = U @ VT # $UV^T$
+  t = p0c.T - R @ p1c.T
+  return R, t
+def testSVDIcp():
+    from dataProcess import Utils,config
+    from container import Models
+    t = Models()
+    sPC = Utils.standardPC(t) # fixed face pose
+    random_idx = random.sample([i for i in range(config['PC_points_sample_range'])], config['PC_points_piars'])
+    standard_idx = sPC[random_idx] # random point in standard face
+    standard_distance = np.linalg.norm(standard_idx[:int(config['PC_points_piars'] / 2)] - standard_idx[int(config['PC_points_piars'] / 2):], axis=1)
+    _, _, ver_lst, _, pc = Utils.deep_features('E:/cohn-kanade-images/S005/001/S005_001_00000001.png', 0, t)
+    _, _, ver_lst0, _, pc0 = Utils.deep_features('E:/cohn-kanade-images/S149/002/S149_002_00000013.png', 0, t)
+    vari_idx = pc[random_idx]
+    vari_idx0 = pc0[random_idx]
+    vari_distance = np.linalg.norm(vari_idx[:int(config['PC_points_piars'] / 2)] - vari_idx[int(config['PC_points_piars'] / 2):], axis=1)
+    vari_distance0 = np.linalg.norm(vari_idx0[:int(config['PC_points_piars'] / 2)] - vari_idx0[int(config['PC_points_piars'] / 2):], axis=1)
+    rates = standard_distance / vari_distance
+    rates0 = standard_distance / vari_distance0
+    rate = np.median(rates)
+    rate0 = np.median(rates0)
+    ver_lst[0] *= rate
+    ver_lst0[0] *= rate0
+    pc *= rate
+    pc0 *= rate0
+    Utils.open3dVerify(np.hstack((ver_lst[0], ver_lst0[0])), np.vstack((pc, pc0)), sPC)
+    r,t = solveICPBySVD(p0=sPC,p1 = pc)
+    r0,t0 = solveICPBySVD(p0=sPC,p1 = pc0)
+    newpc = r@pc.T+t
+    newpc0 = r0@pc0.T+t0
+    newlms = r @ ver_lst[0] + t
+    newlms0 = r0 @ ver_lst0[0] + t0
+    Utils.open3dVerify(np.hstack((newlms,newlms0)),np.vstack((newpc.T,newpc0.T)),sPC)
+def testnprandomint():
+    raw_lms_frame = np.zeros((68,3))
+    how_many_point = np.random.randint(1, high=69)
+    lms_idx = random.sample([i for i in range(68)], how_many_point)
+    for l in lms_idx:
+        value_times = random.sample([10,100,1000],1)
+        noi_xyz = np.random.random((1,3)) * value_times
+        raw_lms_frame[l] = noi_xyz
+        print(raw_lms_frame)
 if __name__ == '__main__':
-    testadd()
+    testnprandomint()
     pass

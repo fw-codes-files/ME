@@ -50,13 +50,14 @@ class RNNModel(BaseModel):
 # LSTM模型
 class LSTMModel(BaseModel):
 
-    def __init__(self, inputDim, hiddenNum, outputDim, layerNum, cell, use_cuda):
+    def __init__(self, inputDim, hiddenNum, outputDim, layerNum, cell, use_cuda, feature_dim=1):
         super(LSTMModel, self).__init__(inputDim, hiddenNum, outputDim, layerNum, cell, use_cuda)
-        self.alpha = nn.Sequential(nn.Linear(inputDim, 1),nn.Sigmoid()) # act on single frame
-        self.beta = nn.Sequential(nn.Linear(inputDim + hiddenNum, 1), nn.Sigmoid()) # act on single sample
-        self.lastL = nn.Linear(inputDim + hiddenNum, 7)
+        self.input2feature = nn.Sequential(nn.Linear(inputDim,128),nn.ReLU(),nn.Linear(128,feature_dim),nn.ReLU())
+        self.alpha = nn.Sequential(nn.Linear(feature_dim, 1),nn.Sigmoid()) # act on single frame
+        self.beta = nn.Sequential(nn.Linear(feature_dim + hiddenNum, 1), nn.Sigmoid()) # act on single sample
+        self.lastL = nn.Linear(feature_dim + hiddenNum, outputDim)
 
-    def forward(self, x):
+    def forward(self, x, video_feature:bool = False):
         # x shape (bs, seq_len, input_dim)
         batchSize = x.size(0)
         h0 = Variable(torch.zeros(self.layerNum * 1, batchSize, self.hiddenNum))
@@ -64,15 +65,16 @@ class LSTMModel(BaseModel):
         if self.use_cuda:
             h0 = h0.cuda()
             c0 = c0.cuda()
-        rnnOutput, hn = self.cell(x, (h0, c0))
-        hn = hn[0][-1].view(batchSize, 1, self.hiddenNum)
         # fcOutput = self.fc(hn)
-        alphas = self.alpha(x) # (bs, seq_len, 1) frame level
-        hns = torch.tile(hn, (1, x.size(1), 1)) # (bs, seq_len, hiddenNum)
-        aggregation = torch.cat((x, hns), dim=2) # (bs, seq_len, hiddenNum + inputDim)
+        rnnOutput, hn = self.cell(x, (h0, c0))
+        hn = hn[0][-1].view(batchSize, 1, self.hiddenNum)  # video level feature
+        hns = torch.tile(hn, (1, x.size(1), 1))  # (bs, seq_len, hiddenNum)
+        x = self.input2feature(x) # (bs, seq_len, feature_dim)
+        aggregation = torch.cat((x, hns), dim=2)  # (bs, seq_len, hiddenNum + feature_dim)
+        alphas = self.alpha(x) # (bs, seq_len, 1) frame level attention weights
         betas = self.beta(aggregation) # (bs, seq_len, 1)
         alpha_betas = torch.mul(alphas, betas) # (bs, seq_len, 1)
-        weighted_sum = torch.sum(torch.mul(alpha_betas, aggregation), dim=1) # (bs, hiddenNum + inputDim)
+        weighted_sum = torch.sum(torch.mul(alpha_betas, aggregation), dim=1) # (bs, hiddenNum + feature_dim)
         features = weighted_sum / torch.sum(alpha_betas, dim=1) # (bs, hiddenNum + inputDim)
         output = self.lastL(features)
         return output
@@ -358,3 +360,50 @@ def resnet18_at(pretrained=False, **kwargs):
     # Constructs base a ResNet-18 model.
     model = ResNet_AT(BasicBlock_AT, [2, 2, 2, 2], **kwargs)
     return model
+
+class EmoTransformer(nn.Module):
+    def __init__(self,input,nhead,num_layers,batch_first,output_dim): # bs first True
+        '''
+            1. embedding layer is may be needed, because more parameters has more fitting capacity.
+            2. position encoding layer has one more position for cls token, thus, concatenation cls token to input follows embedding.
+            3. transformer does not care seq_len.
+            4. after encoder, cls token will be used for classification.
+            5. encoder has normalization layer, input data normalizing is no needed?
+        '''
+        from torch.nn import TransformerEncoder, TransformerEncoderLayer
+        from dataProcess import config
+        super(EmoTransformer, self).__init__()
+        d_model = config['T_forward_dim']
+        self.input_embedding = nn.Sequential(nn.Linear(input, d_model))
+        pe = torch.zeros(25 + 1, d_model) # add cls token
+        position = torch.arange(0, 26).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * -(math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term) # sin
+        pe[:, 1::2] = torch.cos(position * div_term) # cos
+        self.cls_token = nn.Parameter(torch.randn(1, 1, d_model))
+        self.pe = pe.unsqueeze(0)
+        self.pos_embedding = nn.Parameter(torch.randn(1, 26, d_model))
+        self.encoder_layer = TransformerEncoderLayer(d_model=d_model, nhead=nhead, batch_first=batch_first,dim_feedforward=d_model,activation=config['T_activation'])
+        self.transformer_encoder = TransformerEncoder(self.encoder_layer, num_layers=num_layers)
+        self.pred = nn.Sequential(nn.Linear(d_model, output_dim))
+    def forward(self, x):
+        x = self.input_embedding(x) # (bs,seq_len,d_model)
+        cls_tokens = torch.tile(self.cls_token, (x.shape[0],1,1)) # (bs,1,d_model)
+        cls_x = torch.cat((cls_tokens, x), dim=1) # (bs,seq_len + 1,d_model)
+        cls_x += self.pos_embedding
+        # cls_x = cls_x + Variable(self.pe[:, :cls_x.size(1)],requires_grad=False).cuda() # (bs,seq_len + 1,d_model)
+        x_ = self.transformer_encoder(cls_x) # (bs,seq_len + 1,d_model)
+        v_feature = x_[:,0,:] # (bs,1,d_model)
+        output = self.pred(v_feature)
+        return output
+
+class AutoEncoder(nn.Module):
+    def __init__(self):
+        super(AutoEncoder, self).__init__()
+        self.AE_encoder = nn.Sequential(nn.Linear(204,128),nn.ReLU(),nn.Linear(128,32),nn.ReLU(),nn.Linear(32,8))
+        self.AE_decoder = nn.Sequential(nn.Linear(8,32),nn.ReLU(),nn.Linear(32,128),nn.ReLU(),nn.Linear(128,204))
+
+    def forward(self,x):
+        mid = self.AE_encoder(x)
+        output = self.AE_decoder(mid)
+        return output
