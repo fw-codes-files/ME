@@ -19,6 +19,7 @@ target = np.array([[16, 12], [31, 12]])  # 还是要调整一下
 target_fan = np.array([[75, 56], [150, 56]])
 config = yaml.safe_load(open('./config.yaml'))
 EOS = np.zeros((1, config['LSTM_input_dim']))
+AE_EOS = np.zeros((1, config['AE_mid_dim']))
 standardImg = cv2.imread('./img.png')
 
 
@@ -542,7 +543,7 @@ class Dataprocess():
         return np.array(pca_lst, dtype=object)
 
     @classmethod
-    def dataAlign2WindowSize(cls, ws, feature, lms3d, label, step:int = 1):
+    def dataAlign2WindowSize(cls, ws, feature, lms3d, label, step:int = 1, use_AE:bool = False):
         '''
             args:
                 ws: window size, also known as sequence length
@@ -574,7 +575,10 @@ class Dataprocess():
             if ori_video.shape[0] < ws:
                 # EOS
                 EOS_num = ws - ori_video.shape[0]
-                blanks = np.tile(EOS, (EOS_num, 1))
+                if use_AE:
+                    blanks = np.tile(AE_EOS, (EOS_num, 1))
+                else:
+                    blanks = np.tile(EOS, (EOS_num, 1))
                 video = np.concatenate((ori_video, blanks), axis=0)
                 data.append(video)
                 target.append(label[f][0][0])
@@ -619,7 +623,9 @@ class Dataprocess():
                     rates = standard_distance / vari_distance
                     rate = np.median(rates)
                     rs *= rate
-                    rs_total = np.concatenate((rs_total,rs.T),axis=0)
+                    r, Tt = Utils.solveICPBySVD(p0=sPC, p1=pc)
+                    newlms = r @ rs + Tt
+                    rs_total = np.concatenate((rs_total,newlms.T),axis=0)
         noisy_rs = rs_total.reshape((-1, 68, 3))
         noisy_rs = Utils.injectNoiseInput(noisy_rs,config['AE_noi_percent'])
         to_writ = noisy_rs.reshape((-1, 204))
@@ -628,6 +634,9 @@ class Dataprocess():
 
     @classmethod
     def AEdataload(cls):
+        '''
+            run this function for training AE model only
+        '''
         noisy_rs = np.loadtxt('./dataset/AE_3dlms.txt')
         dataset = LSTMDataSet(torch.from_numpy(np.array(noisy_rs, dtype=np.float32)).cuda(),
                               torch.from_numpy(np.array(noisy_rs, dtype=np.float32)).cuda())
@@ -640,26 +649,30 @@ class Dataprocess():
         return train_dataloader, test_dataloader
 
     @classmethod
-    def AE_feeature(cls):
-        # from model import AutoEncoder
-        # checkpoint = torch.load('./weights/AE_model/AE_model_6000.pth')
-        # ae = AutoEncoder()
-        # ae.load_state_dict(checkpoint)
-        # ae.eval()
-        lms3d_train = np.loadtxt(f'./dataset/AE_3dlms.txt')
-        # verify by open3d
-        lms3d = lms3d_train.reshape((-1,68,3))
-        import open3d as o3d
-        pcd_s = o3d.geometry.PointCloud()
-        vis = o3d.visualization.Visualizer()
-        vis.create_window()
-        for l in range(lms3d.shape[0]):
-            pcd_s.points = o3d.utility.Vector3dVector(lms3d[l])
-            pcd_s.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
-            vis.add_geometry(pcd_s)
-            vis.poll_events()
-            vis.update_renderer()
-            time.sleep(1)
+    def AE_feature(cls,epoch, mid_dim, fold, split_train, split_test):
+        from model import AutoEncoder
+        checkpoint = torch.load(f'./weights/AE_model/AE_model_{epoch}_mid_{mid_dim}.pth')
+        ae = AutoEncoder()
+        ae.load_state_dict(checkpoint)
+        ae.eval()
+        ae.cuda()
+        lms3d_train = np.loadtxt(f'dataset/3dlms_fold{fold}_train.txt').reshape((-1, 204))
+        lms3d_test = np.loadtxt(f'dataset/3dlms_fold{fold}_train.txt').reshape((-1, 204))
+        dataset_train = LSTMDataSet(torch.from_numpy(np.array(lms3d_train, dtype=np.float32)).cuda(),torch.from_numpy(np.array(lms3d_train, dtype=np.float32)).cuda())
+        dataset_test = LSTMDataSet(torch.from_numpy(np.array(lms3d_test, dtype=np.float32)).cuda(),torch.from_numpy(np.array(lms3d_test, dtype=np.float32)).cuda())
+        train_dataloader = torch.utils.data.DataLoader(dataset_train, shuffle=False,batch_size=config['batch_size'])
+        test_dataloader = torch.utils.data.DataLoader(dataset_test, shuffle=False,batch_size=config['batch_size'])
+        train_feature = np.zeros((0,config['AE_mid_dim']))
+        test_feature = np.zeros((0,config['AE_mid_dim']))
+        for ip,tgt in train_dataloader:
+            pred = ae(ip, use_mid=True)
+            train_feature = np.concatenate((train_feature, pred.cpu().detach().numpy()),axis=0)
+        for ipt,tgtt in test_dataloader:
+            pred_t = ae(ipt, use_mid=True)
+            test_feature = np.concatenate((test_feature, pred_t.cpu().detach().numpy()), axis=0)
+        _, sp_train_feature = Utils.insertOrSample(split_train.astype(np.int_), train_feature.astype(np.float32))
+        _, sp_test_feature = Utils.insertOrSample(split_test.astype(np.int_), test_feature.astype(np.float32))
+        return sp_train_feature, sp_test_feature
 if __name__ == '__main__':
     # 高清视频社区的素材
     # Dataprocess.datasetProcess('E:/lstm_data4train')
@@ -686,7 +699,7 @@ if __name__ == '__main__':
     #     t = Models(f)
     #     Utils.deep_features('./test.jpg', 1, t, 'fan')
     # unit test of 3d lms of all CK+
-    # Dataprocess.AEinput('E:/cohn-kanade-images/')
+    Dataprocess.AEinput('E:/cohn-kanade-images/')
     # verify lms
-    Dataprocess.AE_feeature()
+    # Dataprocess.AE_feeature()
     pass

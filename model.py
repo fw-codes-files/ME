@@ -6,6 +6,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 import math
+import yaml
+config = yaml.safe_load(open('./config.yaml'))
 
 
 # RNNs模型基类，主要是用于指定参数和cell类型
@@ -400,10 +402,12 @@ class EmoTransformer(nn.Module):
 class AutoEncoder(nn.Module):
     def __init__(self):
         super(AutoEncoder, self).__init__()
-        self.AE_encoder = nn.Sequential(nn.Linear(204,128),nn.ReLU(),nn.Linear(128,32),nn.ReLU(),nn.Linear(32,8))
-        self.AE_decoder = nn.Sequential(nn.Linear(8,32),nn.ReLU(),nn.Linear(32,128),nn.ReLU(),nn.Linear(128,204))
+        self.AE_encoder = nn.Sequential(nn.Linear(204,128),nn.ReLU(),nn.Linear(128,32),nn.ReLU(),nn.Linear(32,config['AE_mid_dim']))
+        self.AE_decoder = nn.Sequential(nn.Linear(config['AE_mid_dim'],32),nn.ReLU(),nn.Linear(32,128),nn.ReLU(),nn.Linear(128,204))
 
-    def forward(self,x):
+    def forward(self,x, use_mid:bool=False):
         mid = self.AE_encoder(x)
+        if use_mid:
+            return mid
         output = self.AE_decoder(mid)
         return output

@@ -290,6 +290,7 @@ class Transformer_traintest():
         logging.info('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
         logging.info(f'{len(f_lst)} folds average acc is {sum(acc_lst) / len(f_lst)}')
         logging.info('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+
     @classmethod
     def trainBypackage(cls,fast, epoch):
         from vit_pytorch import ViT
@@ -346,6 +347,67 @@ class Transformer_traintest():
                     total_t += test_input.shape[0]
                 print(f'eval acc:{score_t / total_t * 100}%')
 
+    @classmethod
+    def AEandViT(cls, fast, epoch):
+        from model import EmoTransformer
+        from torch.utils.tensorboard import SummaryWriter
+        acc_lst = [0] * 10
+        if fast:
+            f_lst = [1, 5, 9]
+        else:
+            f_lst = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        for fold in f_lst:
+            trans = EmoTransformer(input=config['AE_mid_dim'], nhead=config['T_head_num'], num_layers=config['T_block_num'],
+                                   batch_first=config['T_bs_first'], output_dim=config['T_output_dim'])
+            trans.cuda()
+            optimizer = torch.optim.Adam(trans.parameters(), lr=1e-6, weight_decay=0.05)
+            loss_func = torch.nn.CrossEntropyLoss()
+            label, feature, lms3d, seqs, label_test, feature_test, lms3d_test, seqs_test = Dataprocess.dataForLSTM(fold, crop=True)
+            ae_lms,ae_lms_test = Dataprocess.AE_feature(config['AE_pth_epoch'],config['AE_mid_dim'],fold,seqs,seqs_test)
+            train_dataloader = Dataprocess.dataAlign2WindowSize(config['window_size'], feature, ae_lms, label,
+                                                                int(config['Sample_frequency']),use_AE=True)
+            test_dataloader = Dataprocess.dataAlign2WindowSize(config['window_size'], feature_test, ae_lms_test,
+                                                               label_test, int(config['Sample_frequency']),use_AE=True)
+
+            acc = 0
+            writer_loss = SummaryWriter(f'./tb/loss/{fold}')
+            writer_acc_train = SummaryWriter(f'./tb/acc/train/{fold}')
+            writer_acc_test = SummaryWriter(f'./tb/acc/test/{fold}')
+            for e in range(epoch):
+                trans.train()
+                score, score_t, total, total_t = 0, 0, 0, 0
+                for input, target in train_dataloader:
+                    optimizer.zero_grad()
+                    pred = trans(input)
+                    loss = loss_func(pred, target.long())
+                    loss.backward()
+                    optimizer.step()
+                    idx_pred = torch.topk(pred, 1, dim=1)[1]
+                    rs = idx_pred.eq(target.reshape(-1, 1))
+                    score += rs.view(-1).float().sum()
+                    total += input.shape[0]
+                sacal_loss = loss.detach().cpu()
+                writer_loss.add_scalar('train loss', sacal_loss, e)
+                print('\r' + f'fold:{fold} epoch:{e} loss:{loss} acc:{score / total * 100}% ', end='', flush=True)
+                writer_acc_train.add_scalar('train acc', score / total * 100, e)
+                trans.eval()
+                for test_input, test_label in test_dataloader:
+                    pred = trans(test_input)
+                    idx_pred = torch.topk(pred, 1, dim=1)[1]
+                    rs = idx_pred.eq(test_label.reshape(-1, 1))
+                    score_t += rs.view(-1).float().sum()
+                    total_t += test_input.shape[0]
+                writer_acc_test.add_scalar('test acc', score_t / total_t * 100, e)
+                if acc < score_t / total_t:
+                    acc = score_t / total_t
+                    acc_lst[fold - 1] = acc
+                    logging.info(
+                        f'minibatch_fold_{fold}_epoch_{e}_\ttrainAcc_{score / total * 100} %\t_\ttestAcc{acc * 100} %\t_bs_{config["batch_size"]}_lr_{config["learning_rate"]}_ln_{6}_hd_{6}_ws_{config["window_size"]}')
+            logging.info(
+                f'------------------------------------fold{fold} ends-----------------------------------------------')
+        logging.info('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+        logging.info(f'{len(f_lst)} folds average acc is {sum(acc_lst) / len(f_lst)}')
+        logging.info('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
 class AutoEncoder():
     def __init__(self):
         pass
@@ -378,7 +440,7 @@ class AutoEncoder():
                 pass
             else:
                 if e%1000 ==0 :
-                    torch.save(ae.state_dict(),f'./weights/AE_model/AE_model_{e}.pth')
+                    torch.save(ae.state_dict(),f'./weights/AE_model/AE_model_{e}_mid_{16}.pth')
             ae.eval()
             for input,_ in test_dataloader:
                 output = ae(input)
@@ -404,7 +466,7 @@ class AutoEncoder():
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='LSTM train function choice')
-    parser.add_argument('-M', default='transformer', type=str, metavar='N',
+    parser.add_argument('-M', default='aevit', type=str, metavar='N',
                         help='s means single and m means minibatch')
     args = parser.parse_args()
     if args.M == 'single':
@@ -414,11 +476,13 @@ def main():
     elif args.M == 'attention':
         LSTM_model_traintest.train_justNfolds(cut=False, epoch=1024, fast=False)
     elif args.M == 'transformer':
-        Transformer_traintest.train(True,2000)
+        Transformer_traintest.train(True, 2000)
     elif args.M == 'p_transformer':
         Transformer_traintest.trainBypackage(True,8192)
     elif args.M == 'ae':
         AutoEncoder.train()
+    elif args.M == 'aevit':
+        Transformer_traintest.AEandViT(True, 2000) # ae dim is related to tsm forward dim
 
 if __name__ == '__main__':
     main()

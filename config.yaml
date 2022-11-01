@@ -64,7 +64,7 @@ LSTM_cell: 'LSTM'
 # Tansformer config
 T_block_num: 6
 T_head_num: 8
-T_forward_dim: 2048
+T_forward_dim: 256
 T_activation: 'gelu'
 T_output_dim: 7
 T_bs_first: True
@@ -73,6 +73,8 @@ AE_noi_percent: 0.15
 AE_train_percent: 0.7
 AE_loss_train: './tb/loss/AE/train/'
 AE_loss_test: './tb/loss/AE/test/'
+AE_mid_dim: 8
+AE_pth_epoch: 6000
 # model config
 use_cuda: True
 batch_size: 8

@@ -1,5 +1,6 @@
 import random
 
+import cv2
 import numpy as np
 import torch
 
@@ -285,6 +286,15 @@ def testnprandomint():
         noi_xyz = np.random.random((1,3)) * value_times
         raw_lms_frame[l] = noi_xyz
         print(raw_lms_frame)
+def testCVDoG():
+    src = cv2.imread('./img.png')
+    tg0 = cv2.GaussianBlur(src,(5,5),0.3)
+    tg1 = cv2.GaussianBlur(src,(5,5),0.4)
+    dog = abs(tg1-tg0)
+    cv2.imshow('0', tg0)
+    cv2.imshow('1', tg1)
+    cv2.imshow('dog',dog)
+    cv2.waitKey(0)
 if __name__ == '__main__':
-    testnprandomint()
+    testCVDoG()
     pass
