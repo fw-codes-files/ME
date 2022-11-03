@@ -5,11 +5,10 @@ import numpy as np
 
 os.environ['CUDA_VISIBLE_DEVICES']='0'
 import torch
-from dataProcess import Dataprocess, LSTMDataSet
+from dataProcess import Dataprocess
 from model import LSTMModel
 import yaml
 from tqdm import trange
-from dataProcess import EOS
 import logging
 import math
 
@@ -231,7 +230,6 @@ class LSTM_model_traintest(object):
         logging.info('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
         logging.info(f'{len(f_lst)} folds average acc is {sum(acc_lst) / len(f_lst)}')
         logging.info('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
-
 class Transformer_traintest():
     def __init__(self):
         pass
@@ -245,7 +243,7 @@ class Transformer_traintest():
         else:
             f_lst = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         for fold in f_lst:
-            trans = EmoTransformer(input=204,nhead=config['T_head_num'],num_layers=config['T_block_num'],batch_first=config['T_bs_first'],output_dim=config['T_output_dim'])
+            trans = EmoTransformer(input=config['T_RGB_fea_dim'],nhead=config['T_head_num'],num_layers=config['T_block_num'],batch_first=config['T_bs_first'],output_dim=config['T_output_dim'])
             trans.cuda()
             optimizer = torch.optim.Adam(trans.parameters(),lr=1e-6, weight_decay=0.05)
             loss_func = torch.nn.CrossEntropyLoss()
@@ -408,6 +406,7 @@ class Transformer_traintest():
         logging.info('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
         logging.info(f'{len(f_lst)} folds average acc is {sum(acc_lst) / len(f_lst)}')
         logging.info('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+
 class AutoEncoder():
     def __init__(self):
         pass
@@ -466,7 +465,7 @@ class AutoEncoder():
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='LSTM train function choice')
-    parser.add_argument('-M', default='aevit', type=str, metavar='N',
+    parser.add_argument('-M', default='transformer', type=str, metavar='N',
                         help='s means single and m means minibatch')
     args = parser.parse_args()
     if args.M == 'single':
@@ -485,4 +484,5 @@ def main():
         Transformer_traintest.AEandViT(True, 2000) # ae dim is related to tsm forward dim
 
 if __name__ == '__main__':
-    main()
+    # main()
+    Transformer_traintest.vitoverfitting()

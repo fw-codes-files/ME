@@ -1,7 +1,4 @@
-import logging
 import random
-import time
-
 import numpy as np
 import cv2
 import os
@@ -15,20 +12,27 @@ from utils.pose import viz_pose
 from sklearn.decomposition import PCA
 import joblib
 
-target = np.array([[16, 12], [31, 12]])  # 还是要调整一下
-target_fan = np.array([[75, 56], [150, 56]])
+##################
+#global variables#
+##################
+target = np.array([[16, 12], [31, 12]])  # eye position in 2d image, for now, fer2013 dataset which image size is 48*48
+target_fan = np.array([[75, 56], [150, 56]])  # like previous line , just image size is 224*224
 config = yaml.safe_load(open('./config.yaml'))
-EOS = np.zeros((1, config['LSTM_input_dim']))
-AE_EOS = np.zeros((1, config['AE_mid_dim']))
-standardImg = cv2.imread('./img.png')
+EOS = np.zeros((1, config['T_RGB_fea_dim']))  # padding of origin 3d lms data sequence
+AE_EOS = np.zeros((1, config['AE_mid_dim']))  # padding of AE mid feature sequence
+standardImg = cv2.imread('./img.png')  # used to through 3DDFA net, then pointcloud produced by this picture will be a standard face pose. All face pose will be aligned to this face's pointcloud pose
 
 
 class LSTMDataSet(data.Dataset):
+    '''
+        this class has no problem, just convert data to dataset
+    '''
+
     def __init__(self, label, concat_features):
         self.target = label
         self.input = concat_features
-    def __getitem__(self, idx):
 
+    def __getitem__(self, idx):
         return self.input[idx], self.target[idx]
 
     def __len__(self):
@@ -41,9 +45,16 @@ class Utils():
         pass
 
     @classmethod
+    def draWithOpen3d(cls, pcd_lst:list):
+        import open3d as o3d
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(np.concatenate(pcd_lst,axis=0))
+        o3d.visualization.draw_geometries([pcd])
+
+    @classmethod
     def getEyesAverage(cls, crop_lms):
         """
-        get center coordinates per eye in 2D
+            get center coordinates per eye in 2D, used to 2d face align
         """
         crop_lms = np.array(crop_lms)
         eyel, eyer = np.mean(crop_lms[:, 36:41], axis=1), np.mean(crop_lms[:, 42:47], axis=1)
@@ -83,8 +94,10 @@ class Utils():
         img = standardImg.reshape(1, standardImg.shape[0], standardImg.shape[1], 3)
         with torch.no_grad():
             boxes = t.face_boxes(img)  # (bs, faces)
-            param_lst, roi_box_lst, _, _ = t.tddfa(img, boxes)  # param_lst(faces(62 = 12 + 40 +10))  roi_box_lst(bs,faces) boxed_imgs(faces) deltaxty_lst(bs, faces)
-            ver_dense, ver_lst = t.tddfa.recon_vers(param_lst, list(chain(*roi_box_lst)), dense_flag=config['3DDFA_dense'])  # ver_dense(faces) ver_lst(faces)
+            param_lst, roi_box_lst, _, _ = t.tddfa(img,
+                                                   boxes)  # param_lst(faces(62 = 12 + 40 +10))  roi_box_lst(bs,faces) boxed_imgs(faces) deltaxty_lst(bs, faces)
+            ver_dense, ver_lst = t.tddfa.recon_vers(param_lst, list(chain(*roi_box_lst)),
+                                                    dense_flag=config['3DDFA_dense'])  # ver_dense(faces) ver_lst(faces)
             T = viz_pose(param_lst)
             standard_pointCloud = ver_dense[0].T
             standard_pointCloud = standard_pointCloud @ T[:3, :3].T + T[:3, 3].T
@@ -142,44 +155,18 @@ class Utils():
                     c2 = torch.unsqueeze(tensorSlice[0][0][0:40, 7:47], dim=0)
                     c3 = torch.unsqueeze(tensorSlice[0][0][7:47, 7:47], dim=0)
                     cs = torch.stack([c0, c1, c2, c3], 0)  # (4,1,40,40)
-                    feature = torch.mean(t.Res_model(cs / 65025), dim=0).reshape(1, -1)  # 替代源码transforms.Normalize(mean=0,std=255)的效果,features = (bs,特征数)
+                    feature = torch.mean(t.Res_model(cs / 65025), dim=0).reshape(1,
+                                                                                 -1)  # 替代源码transforms.Normalize(mean=0,std=255)的效果,features = (bs,特征数)
                     np_f = feature.cpu().numpy()
                 else:
                     aligned_boxed_img = np.swapaxes(aligned_boxed_img, 0, 2)
                     aligned_boxed_img = np.swapaxes(aligned_boxed_img, 1, 2)
-                    f, alpha = t.FAN(torch.from_numpy(aligned_boxed_img).unsqueeze(0).float().cuda()/255, phrase='eval')  # 改用拼接特征
+                    f, alpha = t.FAN(torch.from_numpy(aligned_boxed_img).unsqueeze(0).float().cuda() / 255,
+                                     phrase='eval')  # 改用拼接特征
                     # np_f = f.cpu().numpy()
                 np_label = np.array([label_])
                 cs = torch.empty(0)
                 pass_num += face_num_per_img
-                # pc和lms一同摆正
-                T = viz_pose(param_lst)
-                pc = ver_dense[0].T  # 这里可能有坑,索引应该怎么写？
-                pc = pc @ T[:3, :3].T + T[:3, 3].T
-                ver_lst[ibn] = T[:3, :3]@ver_lst[ibn] + T[:3, 3].reshape(-1,1)
-                ver_lst[ibn] -= pc[0].T.reshape(-1,1)
-                pc -= pc[0]
-                # lms和pc应该贴在一起
-                # import open3d as o3d
-                # pcd = o3d.geometry.PointCloud()
-                # pcd.points = o3d.utility.Vector3dVector(np.vstack((pc,ver_lst[ibn].T)))
-                # o3d.visualization.draw_geometries([pcd])
-            return f, alpha, ver_lst, np_label, pc
-
-    @classmethod
-    def loadAllCKPlus(cls, pth, t):
-        img = cv2.imread(pth)
-        img = img.reshape(1, img.shape[0], img.shape[1], 3)
-        with torch.no_grad():
-            boxes = t.face_boxes(img)  # (bs, faces)
-            param_lst, roi_box_lst, boxed_imgs, deltaxty_lst = t.tddfa(img,
-                                                                       boxes)  # param_lst(faces(62 = 12 + 40 +10))  roi_box_lst(bs,faces) boxed_imgs(faces) deltaxty_lst(bs, faces)
-            ver_dense, ver_lst = t.tddfa.recon_vers(param_lst, list(chain(*roi_box_lst)),
-                                                    dense_flag=config['3DDFA_dense'])  # ver_dense(faces) ver_lst(faces)
-            if not type(ver_lst) in [tuple, list]:
-                ver_lst = [ver_lst]
-            img_bs_num = len(roi_box_lst)
-            for ibn in range(img_bs_num):
                 # pc和lms一同摆正
                 T = viz_pose(param_lst)
                 pc = ver_dense[0].T  # 这里可能有坑,索引应该怎么写？
@@ -190,9 +177,38 @@ class Utils():
                 # lms和pc应该贴在一起
                 # import open3d as o3d
                 # pcd = o3d.geometry.PointCloud()
+                # pcd.points = o3d.utility.Vector3dVector(np.vstack((pc,ver_lst[ibn].T)))
+                # o3d.visualization.draw_geometries([pcd])
+            return f, alpha, ver_lst, np_label, pc
+
+    @classmethod
+    def loadAllCKPlus(cls, pth, t):
+        '''
+            use all CK+ dataset to train AE model, thus, unlabeled data will be loaded too.
+        '''
+        img = cv2.imread(pth)
+        img = img.reshape(1, img.shape[0], img.shape[1], 3)
+        with torch.no_grad():
+            boxes = t.face_boxes(img)  # (bs, faces)
+            param_lst, roi_box_lst, boxed_imgs, deltaxty_lst = t.tddfa(img, boxes)
+            ver_dense, ver_lst = t.tddfa.recon_vers(param_lst, list(chain(*roi_box_lst)), dense_flag=config['3DDFA_dense'])
+            if not type(ver_lst) in [tuple, list]:
+                ver_lst = [ver_lst]
+            img_bs_num = len(roi_box_lst)
+            for ibn in range(img_bs_num):
+                # pc和lms一同摆正
+                T = viz_pose(param_lst)
+                pc = ver_dense[0].T  # idex=0 means just first face in a picture, maybe need to change.
+                pc = pc @ T[:3, :3].T + T[:3, 3].T
+                ver_lst[ibn] = T[:3, :3] @ ver_lst[ibn] + T[:3, 3].reshape(-1, 1)
+                ver_lst[ibn] -= pc[0].T.reshape(-1, 1)
+                pc -= pc[0]
+                # lms和pc应该贴在一起
+                # import open3d as o3d
+                # pcd = o3d.geometry.PointCloud()
                 # pcd.points = o3d.utility.Vector3dVector(ver_lst[ibn].T)
                 # o3d.visualization.draw_geometries([pcd])
-        return ver_lst[ibn],pc
+        return ver_lst[ibn], pc
 
     @classmethod
     def insertMethod(cls, ori_data, delta, inverse: bool = False):
@@ -285,11 +301,11 @@ class Utils():
             pcd_s.points = o3d.utility.Vector3dVector(ver_lst[0].T)
         else:
             pcd_s.points = o3d.utility.Vector3dVector(ver_lst.T)
-        pcd_pc.points = o3d.utility.Vector3dVector(np.vstack((pc,sPC)))
-        o3d.visualization.draw_geometries([pcd_s,pcd_pc])
+        pcd_pc.points = o3d.utility.Vector3dVector(np.vstack((pc, sPC)))
+        o3d.visualization.draw_geometries([pcd_s, pcd_pc])
 
     @classmethod
-    def injectNoiseInput(cls,input, percent):
+    def injectNoiseInput(cls, input, percent):
         '''
             args:
                 percent: how many percent of input will be injected noise
@@ -297,7 +313,7 @@ class Utils():
                 noisy input
         '''
         length = input.shape[0]
-        noi_lst = random.sample([i for i in range(length)], int(length*percent))
+        noi_lst = random.sample([i for i in range(length)], int(length * percent))
         for n in noi_lst:
             raw_lms_frame = input[n].copy()
             how_many_point = np.random.randint(1, high=69)
@@ -328,6 +344,8 @@ class Utils():
         R = U @ VT  # $UV^T$
         t = p0c.T - R @ p1c.T
         return R, t
+
+
 class Dataprocess():
     def __init__(self):
         pass
@@ -424,9 +442,9 @@ class Dataprocess():
             split_test.append(frames)
         # print(len(test_lst),len(train_lst))
         # 根据插值或者采样的结果 得到深度特征,3dlms,label
-        t = Models(False,test_fold)
+        t = Models(False, test_fold)
         sPC = Utils.standardPC(t)
-        random_idx = random.sample([i for i in range(config['PC_points_sample_range'])],config['PC_points_piars'])
+        random_idx = random.sample([i for i in range(config['PC_points_sample_range'])], config['PC_points_piars'])
         alphi_lst = []
         fi_lst = []
 
@@ -435,10 +453,13 @@ class Dataprocess():
             fi_lst.append(fi)
             alphi_lst.append(alphi)
             standard_idx = sPC[random_idx]
-            standard_distance = np.linalg.norm(standard_idx[:int(config['PC_points_piars']/2)] - standard_idx[int(config['PC_points_piars']/2):],axis=1)
+            standard_distance = np.linalg.norm(
+                standard_idx[:int(config['PC_points_piars'] / 2)] - standard_idx[int(config['PC_points_piars'] / 2):],
+                axis=1)
             vari_idx = pc[random_idx]
-            vari_distance = np.linalg.norm(vari_idx[:int(config['PC_points_piars']/2)] - vari_idx[int(config['PC_points_piars']/2):],axis=1)
-            rates = standard_distance/vari_distance
+            vari_distance = np.linalg.norm(
+                vari_idx[:int(config['PC_points_piars'] / 2)] - vari_idx[int(config['PC_points_piars'] / 2):], axis=1)
+            rates = standard_distance / vari_distance
             rate = np.median(rates)
             ver_lst[0] *= rate
             pc *= rate
@@ -451,7 +472,7 @@ class Dataprocess():
             #     np.savetxt(n3d, newlms.T)
             # with open(f'./dataset/label_fold{test_fold}_train.txt', 'ab') as nl:
             #     np.savetxt(nl, np_label)
-        Utils.aggregateFeaAndCode(fi_lst,alphi_lst,split_train,test_fold,'train')
+        Utils.aggregateFeaAndCode(fi_lst, alphi_lst, split_train, test_fold, 'train')
         alphi_lst = []
         fi_lst = []
         for pth, label_, fms_number in tqdm.tqdm(test_lst):
@@ -459,9 +480,12 @@ class Dataprocess():
             fi_lst.append(fi)
             alphi_lst.append(alphi)
             standard_idx = sPC[random_idx]
-            standard_distance = np.linalg.norm(standard_idx[:int(config['PC_points_piars']/2)] - standard_idx[int(config['PC_points_piars']/2):], axis=1)
+            standard_distance = np.linalg.norm(
+                standard_idx[:int(config['PC_points_piars'] / 2)] - standard_idx[int(config['PC_points_piars'] / 2):],
+                axis=1)
             vari_idx = pc[random_idx]
-            vari_distance = np.linalg.norm(vari_idx[:int(config['PC_points_piars']/2)] - vari_idx[int(config['PC_points_piars']/2):], axis=1)
+            vari_distance = np.linalg.norm(
+                vari_idx[:int(config['PC_points_piars'] / 2)] - vari_idx[int(config['PC_points_piars'] / 2):], axis=1)
             rates = standard_distance / vari_distance
             rate = np.median(rates)
             ver_lst[0] *= rate
@@ -473,7 +497,7 @@ class Dataprocess():
             #     np.savetxt(n3d, newlms.T)
             # with open(f'./dataset/label_fold{test_fold}_test.txt', 'ab') as nl:
             #     np.savetxt(nl, np_label)
-        Utils.aggregateFeaAndCode(fi_lst, alphi_lst, split_test, test_fold,'test')
+        Utils.aggregateFeaAndCode(fi_lst, alphi_lst, split_test, test_fold, 'test')
         for fms in tqdm.tqdm(split_train):
             with open(f'./dataset/split_{test_fold}_train.txt', 'ab') as nfn:
                 np.savetxt(nfn, np.array(fms).reshape([1, -1]))
@@ -525,7 +549,7 @@ class Dataprocess():
                 transformed data
         '''
         # squeeze data
-        data = np.concatenate(ori_data,axis=0)
+        data = np.concatenate(ori_data, axis=0)
         # Dimension reduction
         if flag:
             p_model = PCA(n_components=int(config['PCA_dim']))
@@ -538,12 +562,12 @@ class Dataprocess():
         idx = 0
         pca_lst = []
         for s in seqs:
-            pca_lst.append(pca_data[idx:idx+s])
+            pca_lst.append(pca_data[idx:idx + s])
             idx += s
         return np.array(pca_lst, dtype=object)
 
     @classmethod
-    def dataAlign2WindowSize(cls, ws, feature, lms3d, label, step:int = 1, use_AE:bool = False):
+    def dataAlign2WindowSize(cls, ws, feature, lms3d, label, step: int = 1, use_AE: bool = False):
         '''
             args:
                 ws: window size, also known as sequence length
@@ -571,7 +595,7 @@ class Dataprocess():
 
             # concatnate and align to ws -- video level
             # ori_video = np.hstack((feature[f][:,512:], lms3d[f]))
-            ori_video = lms3d[f]
+            ori_video = feature[f][:,:512]
             if ori_video.shape[0] < ws:
                 # EOS
                 EOS_num = ws - ori_video.shape[0]
@@ -590,7 +614,8 @@ class Dataprocess():
                     target.append(label[f][0][0].astype(np.long))
 
         # dataset and dataloader
-        dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)).cuda(), torch.from_numpy(np.array(data, dtype=np.float32)).cuda())
+        dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)).cuda(),
+                              torch.from_numpy(np.array(data, dtype=np.float32)).cuda())
         dataloader = torch.utils.data.DataLoader(dataset, shuffle=True, batch_size=config['batch_size'])
         return dataloader
 
@@ -601,33 +626,35 @@ class Dataprocess():
             args:
                 path: ck+ picture
         '''
-        rs_total = np.zeros((0,3))
-        t = Models(False, 1) # whatever second parameter is, just use 3DDFA, for now.
+        rs_total = np.zeros((0, 3))
+        t = Models(False, 1)  # whatever second parameter is, just use 3DDFA, for now.
         sPC = Utils.standardPC(t)
         random_idx = random.sample([i for i in range(config['PC_points_sample_range'])], config['PC_points_piars'])
         s_dir_lst = os.listdir(path)
         for s_dir in s_dir_lst:
-            num_lst = os.listdir(os.path.join(path,s_dir))
+            num_lst = os.listdir(os.path.join(path, s_dir))
             for n in num_lst:
-                pic_lst = os.listdir(os.path.join(path,s_dir,n))
+                pic_lst = os.listdir(os.path.join(path, s_dir, n))
                 for p in pic_lst:
-                    img_pth = os.path.join(path,s_dir,n,p)
-                    rs,pc = Utils.loadAllCKPlus(img_pth,t)
+                    img_pth = os.path.join(path, s_dir, n, p)
+                    rs, pc = Utils.loadAllCKPlus(img_pth, t)
                     standard_idx = sPC[random_idx]
                     standard_distance = np.linalg.norm(
-                        standard_idx[:int(config['PC_points_piars'] / 2)] - standard_idx[int(config['PC_points_piars'] / 2):],
+                        standard_idx[:int(config['PC_points_piars'] / 2)] - standard_idx[
+                                                                            int(config['PC_points_piars'] / 2):],
                         axis=1)
                     vari_idx = pc[random_idx]
                     vari_distance = np.linalg.norm(
-                        vari_idx[:int(config['PC_points_piars'] / 2)] - vari_idx[int(config['PC_points_piars'] / 2):], axis=1)
+                        vari_idx[:int(config['PC_points_piars'] / 2)] - vari_idx[int(config['PC_points_piars'] / 2):],
+                        axis=1)
                     rates = standard_distance / vari_distance
                     rate = np.median(rates)
                     rs *= rate
                     r, Tt = Utils.solveICPBySVD(p0=sPC, p1=pc)
                     newlms = r @ rs + Tt
-                    rs_total = np.concatenate((rs_total,newlms.T),axis=0)
+                    rs_total = np.concatenate((rs_total, newlms.T), axis=0)
         noisy_rs = rs_total.reshape((-1, 68, 3))
-        noisy_rs = Utils.injectNoiseInput(noisy_rs,config['AE_noi_percent'])
+        noisy_rs = Utils.injectNoiseInput(noisy_rs, config['AE_noi_percent'])
         to_writ = noisy_rs.reshape((-1, 204))
         np.savetxt('./dataset/AE_3dlms.txt', to_writ)
         print('数据保存完毕')
@@ -649,7 +676,7 @@ class Dataprocess():
         return train_dataloader, test_dataloader
 
     @classmethod
-    def AE_feature(cls,epoch, mid_dim, fold, split_train, split_test):
+    def AE_feature(cls, epoch, mid_dim, fold, split_train, split_test):
         from model import AutoEncoder
         checkpoint = torch.load(f'./weights/AE_model/AE_model_{epoch}_mid_{mid_dim}.pth')
         ae = AutoEncoder()
@@ -658,21 +685,25 @@ class Dataprocess():
         ae.cuda()
         lms3d_train = np.loadtxt(f'dataset/3dlms_fold{fold}_train.txt').reshape((-1, 204))
         lms3d_test = np.loadtxt(f'dataset/3dlms_fold{fold}_train.txt').reshape((-1, 204))
-        dataset_train = LSTMDataSet(torch.from_numpy(np.array(lms3d_train, dtype=np.float32)).cuda(),torch.from_numpy(np.array(lms3d_train, dtype=np.float32)).cuda())
-        dataset_test = LSTMDataSet(torch.from_numpy(np.array(lms3d_test, dtype=np.float32)).cuda(),torch.from_numpy(np.array(lms3d_test, dtype=np.float32)).cuda())
-        train_dataloader = torch.utils.data.DataLoader(dataset_train, shuffle=False,batch_size=config['batch_size'])
-        test_dataloader = torch.utils.data.DataLoader(dataset_test, shuffle=False,batch_size=config['batch_size'])
-        train_feature = np.zeros((0,config['AE_mid_dim']))
-        test_feature = np.zeros((0,config['AE_mid_dim']))
-        for ip,tgt in train_dataloader:
+        dataset_train = LSTMDataSet(torch.from_numpy(np.array(lms3d_train, dtype=np.float32)).cuda(),
+                                    torch.from_numpy(np.array(lms3d_train, dtype=np.float32)).cuda())
+        dataset_test = LSTMDataSet(torch.from_numpy(np.array(lms3d_test, dtype=np.float32)).cuda(),
+                                   torch.from_numpy(np.array(lms3d_test, dtype=np.float32)).cuda())
+        train_dataloader = torch.utils.data.DataLoader(dataset_train, shuffle=False, batch_size=config['batch_size'])
+        test_dataloader = torch.utils.data.DataLoader(dataset_test, shuffle=False, batch_size=config['batch_size'])
+        train_feature = np.zeros((0, config['AE_mid_dim']))
+        test_feature = np.zeros((0, config['AE_mid_dim']))
+        for ip, tgt in train_dataloader:
             pred = ae(ip, use_mid=True)
-            train_feature = np.concatenate((train_feature, pred.cpu().detach().numpy()),axis=0)
-        for ipt,tgtt in test_dataloader:
+            train_feature = np.concatenate((train_feature, pred.cpu().detach().numpy()), axis=0)
+        for ipt, tgtt in test_dataloader:
             pred_t = ae(ipt, use_mid=True)
             test_feature = np.concatenate((test_feature, pred_t.cpu().detach().numpy()), axis=0)
         _, sp_train_feature = Utils.insertOrSample(split_train.astype(np.int_), train_feature.astype(np.float32))
         _, sp_test_feature = Utils.insertOrSample(split_test.astype(np.int_), test_feature.astype(np.float32))
         return sp_train_feature, sp_test_feature
+
+
 if __name__ == '__main__':
     # 高清视频社区的素材
     # Dataprocess.datasetProcess('E:/lstm_data4train')
@@ -699,7 +730,21 @@ if __name__ == '__main__':
     #     t = Models(f)
     #     Utils.deep_features('./test.jpg', 1, t, 'fan')
     # unit test of 3d lms of all CK+
-    Dataprocess.AEinput('E:/cohn-kanade-images/')
+    # Dataprocess.AEinput('E:/cohn-kanade-images/')
     # verify lms
-    # Dataprocess.AE_feeature()
+    # import open3d as o3d
+    # noisy_rs = np.loadtxt('./dataset/AE_3dlms.txt')
+    # pcd = o3d.geometry.PointCloud()
+    # vis = o3d.visualization.Visualizer()
+    # vis.create_window()
+    # opt = vis.get_render_option()
+    # opt.background_color = np.asarray([0, 0, 0])
+    # opt.point_size = 5
+    # opt.show_coordinate_frame = True
+    # for n in range(noisy_rs.shape[0]):
+    #     pcd.points = o3d.utility.Vector3dVector(noisy_rs[n].reshape((68,3)))
+    #     pcd.transform([[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]])
+    #     vis.add_geometry(pcd)
+    #     vis.poll_events()
+    #     vis.update_renderer()
     pass

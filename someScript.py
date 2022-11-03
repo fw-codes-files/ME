@@ -207,28 +207,6 @@ def testdataset():
     train = dataset[:2]
     test = dataset[2]
     print(dataset.input.shape[0])
-def testo3dicp():
-    import open3d as o3d
-
-    threshold = 0.2  # 距离阈值
-    trans_init = np.array([[1.0, 0.0, 0.0, 0.0],
-                           [0.0, 1.0, 0.0, 0.0],
-                           [0.0, 0.0, 1.0, 0],
-                           [0.0, 0.0, 0.0, 1.0]])
-    # 计算两个重要指标，fitness计算重叠区域（内点对应关系/目标点数）。越高越好。
-    # inlier_rmse计算所有内在对应关系的均方根误差RMSE。越低越好。
-    source = o3d.geometry.PointCloud()
-    source.points = o3d.utility.Vector3dVector(points1)
-    target = o3d.geometry.PointCloud()
-    target.points = o3d.utility.Vector3dVector(points2)
-    print("Initial alignment")
-    print(source)
-    icp = o3d.pipelines.registration.registration_icp(
-        source, target, threshold, trans_init,
-        o3d.pipelines.registration.TransformationEstimationPointToPoint())
-    print(icp)
-    source.transform(icp.transformation)
-    print(icp.transformation)
 def solveICPBySVD(p0, p1):
   """svd求解3d-3d的Rt, $p_0 = Rp_1 + t$
   Args:
@@ -295,6 +273,12 @@ def testCVDoG():
     cv2.imshow('1', tg1)
     cv2.imshow('dog',dog)
     cv2.waitKey(0)
+def testlist2np():
+    a = [np.zeros((2,3))]
+    print(np.concatenate(a,axis=0))
+def testAVI():
+    pass
+
 if __name__ == '__main__':
-    testCVDoG()
+    testAVI()
     pass

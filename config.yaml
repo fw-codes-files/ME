@@ -62,9 +62,10 @@ LSTM_output_dim: 7
 LSTM_layerNum: 1
 LSTM_cell: 'LSTM'
 # Tansformer config
-T_block_num: 6
+T_RGB_fea_dim: 204
+T_block_num: 2
 T_head_num: 8
-T_forward_dim: 256
+T_forward_dim: 512
 T_activation: 'gelu'
 T_output_dim: 7
 T_bs_first: True
@@ -82,6 +83,7 @@ learning_rate: 1e-6
 
 
 # log information config
-LOG_CHECK: '!!!Attention: 3dlms, fast fold, forward dim 2048,input embedding,MLP[cls],8 head, learnable PE, gelu, 2000 epoch for overfitting!!!'
+#LOG_CHECK: '!!!Attention: 3dlms, fast fold, forward dim 2048,input embedding,MLP[cls],8 head, learnable PE, gelu, 2000 epoch for overfitting!!!'
 #LOG_CHECK: '!!!AE: 3dlms, all ck+ dataset , check net!!!'
+LOG_CHECK: '!!!Attention: rgb feature, fast fold, forward dim 512, MLP[cls], 8 head, 2 encoder, learnable PE, gelu, 1000 epoch for test!!!'
 LOG_pth: 'train.log'
