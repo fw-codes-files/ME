@@ -62,10 +62,11 @@ LSTM_output_dim: 7
 LSTM_layerNum: 1
 LSTM_cell: 'LSTM'
 # Tansformer config
-T_RGB_fea_dim: 204
-T_block_num: 2
+T_input_dim: 204
+T_block_num: 6
 T_head_num: 8
-T_forward_dim: 512
+T_proj_dim: 64
+T_forward_dim: 256
 T_activation: 'gelu'
 T_output_dim: 7
 T_bs_first: True
@@ -76,14 +77,23 @@ AE_loss_train: './tb/loss/AE/train/'
 AE_loss_test: './tb/loss/AE/test/'
 AE_mid_dim: 8
 AE_pth_epoch: 6000
+#ViLT config
+ViLT_model_type: 2
+ViLT_embedding_dim: 64
+ViLT_block_num: 12
+ViLT_head_num: 8
+ViLT_forward_dim: 2048
+ViLT_activation: 'gelu'
+ViLT_output_dim: 7
+ViLT_bs_first: True
 # model config
 use_cuda: True
 batch_size: 8
 learning_rate: 1e-6
-
-
+epoch: 2000
+fast_fold: [1,5,9]
 # log information config
-#LOG_CHECK: '!!!Attention: 3dlms, fast fold, forward dim 2048,input embedding,MLP[cls],8 head, learnable PE, gelu, 2000 epoch for overfitting!!!'
+LOG_CHECK: '!!!ViL: 3dlms, fast fold, forward dim 2048,input embedding 64,MLP[cls],8 head, learnable PE, gelu, 2000 epoch, 6 block, key masked!!!'
 #LOG_CHECK: '!!!AE: 3dlms, all ck+ dataset , check net!!!'
-LOG_CHECK: '!!!Attention: rgb feature, fast fold, forward dim 512, MLP[cls], 8 head, 2 encoder, learnable PE, gelu, 1000 epoch for test!!!'
+#LOG_CHECK: '!!!Attention: rgb feature, fast fold, forward dim 512, MLP[cls], 8 head, 2 encoder, learnable PE, gelu, 1000 epoch for test!!!'
 LOG_pth: 'train.log'

@@ -2,6 +2,7 @@ import random
 import numpy as np
 import cv2
 import os
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 from itertools import chain
 import yaml
 import pdb
@@ -18,7 +19,7 @@ import joblib
 target = np.array([[16, 12], [31, 12]])  # eye position in 2d image, for now, fer2013 dataset which image size is 48*48
 target_fan = np.array([[75, 56], [150, 56]])  # like previous line , just image size is 224*224
 config = yaml.safe_load(open('./config.yaml'))
-EOS = np.zeros((1, config['T_RGB_fea_dim']))  # padding of origin 3d lms data sequence
+EOS = np.zeros((1, config['T_input_dim']))  # padding of origin 3d lms data sequence
 AE_EOS = np.zeros((1, config['AE_mid_dim']))  # padding of AE mid feature sequence
 standardImg = cv2.imread('./img.png')  # used to through 3DDFA net, then pointcloud produced by this picture will be a standard face pose. All face pose will be aligned to this face's pointcloud pose
 
@@ -290,7 +291,7 @@ class Utils():
                 video_sized_copy_feature = torch.tile(video_f_lst[idx], (sptr, 1))
                 concatnated_f = torch.cat((fi_lst[v_idx:v_idx + sptr], video_sized_copy_feature), dim=1)
                 np_f = concatnated_f.cpu().numpy()
-                np.savetxt(nf, np_f)
+                # np.savetxt(nf, np_f)
 
     @classmethod
     def open3dVerify(cls, ver_lst, pc, sPC):
@@ -397,8 +398,7 @@ class Dataprocess():
         test_lst = []
         split_train = []
         split_test = []
-        for index, item in enumerate(
-                data_directory):  # 0, '1-fold\t31\n' in {[0, '1-fold\t31\n'], [1, 'S037/006 Happy\n'], ...}分化两个数据集,txt的操作
+        for index, item in enumerate(data_directory):  # 0, '1-fold\t31\n' in {[0, '1-fold\t31\n'], [1, 'S037/006 Happy\n'], ...}分化两个数据集,txt的操作
             test_fold_str = str(test_fold) + '-fold'
             if test_fold_str in item:
                 for k in range(index + 1, index + int(item.split()[1]) + 1):  # 测试集
@@ -500,10 +500,12 @@ class Dataprocess():
         Utils.aggregateFeaAndCode(fi_lst, alphi_lst, split_test, test_fold, 'test')
         for fms in tqdm.tqdm(split_train):
             with open(f'./dataset/split_{test_fold}_train.txt', 'ab') as nfn:
-                np.savetxt(nfn, np.array(fms).reshape([1, -1]))
+                # np.savetxt(nfn, np.array(fms).reshape([1, -1]))
+                pass
         for fms in tqdm.tqdm(split_test):
             with open(f'./dataset/split_{test_fold}_test.txt', 'ab') as nfn:
-                np.savetxt(nfn, np.array(fms).reshape([1, -1]))
+                # np.savetxt(nfn, np.array(fms).reshape([1, -1]))
+                pass
 
     @classmethod
     def dataForLSTM(cls, fold, crop: bool = False):
@@ -594,8 +596,8 @@ class Dataprocess():
             # lms3d[f] = (lms3d[f] - l_mean.reshape(-1, 1)) / l_std.reshape(-1, 1)
 
             # concatnate and align to ws -- video level
-            # ori_video = np.hstack((feature[f][:,512:], lms3d[f]))
-            ori_video = feature[f][:,:512]
+            # ori_video = np.hstack((feature[f][:,:512], lms3d[f]))
+            ori_video = lms3d[f]
             if ori_video.shape[0] < ws:
                 # EOS
                 EOS_num = ws - ori_video.shape[0]
@@ -711,8 +713,9 @@ if __name__ == '__main__':
     # Dataprocess.deleleDS_Store()
     # CK+数据加载
     # Dataprocess.loadCKPlusData(1)
-    # for i in range(1, 11):
-    #     Dataprocess.loadCKPlusData(i)
+    for i in range(1, 11):
+        print(i)
+        Dataprocess.loadCKPlusData(i)
     # 得到dataset用于训练
     # rs = Dataprocess.dataForLSTM(1, crop=True)
     # Dataprocess.dataAlign2WindowSize(config['window_size'], rs[1], rs[2], rs[0])

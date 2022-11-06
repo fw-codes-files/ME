@@ -276,9 +276,39 @@ def testCVDoG():
 def testlist2np():
     a = [np.zeros((2,3))]
     print(np.concatenate(a,axis=0))
-def testAVI():
-    pass
-
+def testembedding():
+    emb = torch.nn.Embedding(2,64)
+    print(emb)
+def testtensorsplit():
+    a = torch.zeros((8,50,716))
+    c = torch.ones((8,716))
+    a[:,24,:] = c
+    print(a.shape)
+    b= torch.split(a,int(a.shape[1]/2),dim=1)
+    print(len(b))
+def testcat():
+    a = torch.zeros(8,25,204)
+    b = torch.zeros(8,1,204)
+    c = torch.cat((a,b),dim = 1)
+    print(c.shape)
+def testgt():
+    a = torch.zeros((3,2,4))
+    b = torch.ones((1,2,4))
+    c = -torch.ones((1,2,4))
+    a[0] = b
+    a[1] = c
+    d = a==0
+    e = torch.sum(d,dim=2)
+    print(e!=0)
+def test0mulinf():
+    a = 0.1
+    b = -1e+10
+    print(a*b)
+def testRotateMatrix():
+    from dataProcess import target
+    eye = np.array([[10,22],[30,34]])
+    RotateMatrix, _ = cv2.estimateAffinePartial2D(eye, target)
+    print(RotateMatrix)
 if __name__ == '__main__':
-    testAVI()
+    testRotateMatrix()
     pass

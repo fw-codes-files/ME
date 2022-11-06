@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 import math
 import yaml
-config = yaml.safe_load(open('./config.yaml'))
+config = yaml.safe_load(open('./config.yaml',encoding='utf-8'))
 
 
 # RNNs模型基类，主要是用于指定参数和cell类型
@@ -375,7 +375,7 @@ class EmoTransformer(nn.Module):
         from torch.nn import TransformerEncoder, TransformerEncoderLayer
         from dataProcess import config
         super(EmoTransformer, self).__init__()
-        d_model = config['T_forward_dim']
+        d_model = config['T_proj_dim']
         self.input_embedding = nn.Sequential(nn.Linear(input, d_model))
         pe = torch.zeros(25 + 1, d_model) # add cls token
         position = torch.arange(0, 26).unsqueeze(1)
@@ -385,16 +385,19 @@ class EmoTransformer(nn.Module):
         self.cls_token = nn.Parameter(torch.randn(1, 1, d_model))
         self.pe = pe.unsqueeze(0)
         self.pos_embedding = nn.Parameter(torch.randn(1, 26, d_model))
-        self.encoder_layer = TransformerEncoderLayer(d_model=d_model, nhead=nhead, batch_first=batch_first,dim_feedforward=d_model,activation=config['T_activation'])
+        self.encoder_layer = TransformerEncoderLayer(d_model=d_model, nhead=nhead, batch_first=batch_first,dim_feedforward=config['T_forward_dim'],activation=config['T_activation'])
         self.transformer_encoder = TransformerEncoder(self.encoder_layer, num_layers=num_layers)
         self.pred = nn.Sequential(nn.Linear(d_model, output_dim))
     def forward(self, x):
         x = self.input_embedding(x) # (bs,seq_len,d_model)
         cls_tokens = torch.tile(self.cls_token, (x.shape[0],1,1)) # (bs,1,d_model)
         cls_x = torch.cat((cls_tokens, x), dim=1) # (bs,seq_len + 1,d_model)
+        # make a key padding mask matrix
+        tem_m = torch.sum(cls_x,dim=2) # (bs, seq_len+1)
+        mask_m = tem_m==0 # (bs, seq_len+1)
         cls_x += self.pos_embedding
         # cls_x = cls_x + Variable(self.pe[:, :cls_x.size(1)],requires_grad=False).cuda() # (bs,seq_len + 1,d_model)
-        x_ = self.transformer_encoder(cls_x) # (bs,seq_len + 1,d_model)
+        x_ = self.transformer_encoder(cls_x, src_key_padding_mask = mask_m) # (bs,seq_len + 1,d_model)
         v_feature = x_[:,0,:] # (bs,1,d_model)
         output = self.pred(v_feature)
         return output
@@ -411,3 +414,26 @@ class AutoEncoder(nn.Module):
             return mid
         output = self.AE_decoder(mid)
         return output
+
+class ViLT(nn.Module):
+    def __init__(self, model_type_num:int, lms_type_dim:int, rgb_type_dim:int, d_model:int, nhead:int, forward_dim:int, block_num:int, batch_fist:bool):
+        super(ViLT, self).__init__()
+        self.lms_type_project_layer = nn.Linear(lms_type_dim, d_model) # (204, embedding_dim)
+        self.rgb_type_project_layer = nn.Linear(rgb_type_dim, d_model) # (p*p*c, embedding_dim)
+        self.model_emd = nn.Embedding(model_type_num, d_model) # (model_type_num, embedding_dim)
+        self.cls_token = nn.Parameter(torch.randn(1, 1, d_model))
+        self.second_token = nn.Parameter(torch.randn(1, 1, d_model))
+        self.lms_pos_emb = nn.Parameter(torch.randn(1, config['window_size']+1, d_model))
+        self.rgb_pos_emb = nn.Parameter(torch.randn(1, config['window_size']+1, d_model))
+        self.encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, dim_feedforward=forward_dim, activation=config['ViLT_activation'], batch_first=batch_fist)
+        self.encoder = nn.TransformerEncoder(self.encoder_layer, block_num)
+        self.MLP = nn.Sequential(nn.Linear(config['ViLT_embedding_dim'],config['ViLT_embedding_dim']),nn.Tanh(), nn.Linear(config['ViLT_embedding_dim'], 7)) # pool + classification
+    def forward(self, x):
+        x_rgb, x_lms = torch.split(x, 512, dim=2)
+        lms_emb = self.lms_type_project_layer(x_lms)
+        rgb_emb = self.rgb_type_project_layer(x_rgb)
+        input_emb = torch.cat((torch.tile(self.cls_token,dims=(x.shape[0],1,1)),lms_emb,torch.tile(self.second_token,dims=(x.shape[0],1,1)),rgb_emb),dim=1)
+        input_emb += torch.cat((self.lms_pos_emb,self.rgb_pos_emb), dim=1)
+        output_emb = self.encoder(input_emb)
+        pred = self.MLP(output_emb[:,0,:])
+        return pred
