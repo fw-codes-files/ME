@@ -388,16 +388,19 @@ class EmoTransformer(nn.Module):
         self.encoder_layer = TransformerEncoderLayer(d_model=d_model, nhead=nhead, batch_first=batch_first,dim_feedforward=config['T_forward_dim'],activation=config['T_activation'])
         self.transformer_encoder = TransformerEncoder(self.encoder_layer, num_layers=num_layers)
         self.pred = nn.Sequential(nn.Linear(d_model, output_dim))
-    def forward(self, x):
+    def forward(self, x, att_mask:bool = False):
         x = self.input_embedding(x) # (bs,seq_len,d_model)
         cls_tokens = torch.tile(self.cls_token, (x.shape[0],1,1)) # (bs,1,d_model)
         cls_x = torch.cat((cls_tokens, x), dim=1) # (bs,seq_len + 1,d_model)
         # make a key padding mask matrix
-        tem_m = torch.sum(cls_x,dim=2) # (bs, seq_len+1)
-        mask_m = tem_m==0 # (bs, seq_len+1)
+        tem_m = torch.sum(cls_x, dim=2)  # (bs, seq_len+1)
+        mask_m = tem_m == 0  # (bs, seq_len+1)
         cls_x += self.pos_embedding
         # cls_x = cls_x + Variable(self.pe[:, :cls_x.size(1)],requires_grad=False).cuda() # (bs,seq_len + 1,d_model)
-        x_ = self.transformer_encoder(cls_x, src_key_padding_mask = mask_m) # (bs,seq_len + 1,d_model)
+        if att_mask:
+            x_ = self.transformer_encoder(cls_x, src_key_padding_mask = mask_m) # (bs,seq_len + 1,d_model)
+        else:
+            x_ = self.transformer_encoder(cls_x)
         v_feature = x_[:,0,:] # (bs,1,d_model)
         output = self.pred(v_feature)
         return output

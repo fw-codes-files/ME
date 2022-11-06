@@ -569,7 +569,7 @@ class Dataprocess():
         return np.array(pca_lst, dtype=object)
 
     @classmethod
-    def dataAlign2WindowSize(cls, ws, feature, lms3d, label, step: int = 1, use_AE: bool = False):
+    def dataAlign2WindowSize(cls, ws, feature, lms3d, label, use_AE: bool = False, vote:bool=False):
         '''
             args:
                 ws: window size, also known as sequence length
@@ -582,11 +582,13 @@ class Dataprocess():
         '''
         data = []
         target = []
+        samples_counter_lst = []
         '''normalize image features and 3d lms, then concatenate them, but sequence length is fixed, 
             so either break a sample to slices, either concatenate EOS to window size.'''
         for f in range(0, feature.shape[0]):  # video level
             '''this is normalization,  However,3d lms will be a circle in space, 
                 it seems lost much information, so stop normalization for now.'''
+            SC = 0
             # f_mean = np.mean(feature[f][:,:512], axis=1)
             # f_std = np.std(feature[f][:,:512], axis=1)
             # feature[f][:,:512] = (feature[f][:,:512] - f_mean.reshape(-1, 1)) / f_std.reshape(-1, 1)
@@ -608,18 +610,26 @@ class Dataprocess():
                 video = np.concatenate((ori_video, blanks), axis=0)
                 data.append(video)
                 target.append(label[f][0][0])
+                if vote:
+                    samples_counter_lst.append(1)
             else:
                 #  one video generates more shape[0] - ws samples
                 for w in range(ori_video.shape[0] - ws + 1):
                     sample = ori_video[w:w + config['window_size']]
                     data.append(sample)
                     target.append(label[f][0][0].astype(np.long))
-
+                    SC += 1
+                if vote:
+                    samples_counter_lst.append(SC)
+            SC = 0
         # dataset and dataloader
         dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)).cuda(),
                               torch.from_numpy(np.array(data, dtype=np.float32)).cuda())
         dataloader = torch.utils.data.DataLoader(dataset, shuffle=True, batch_size=config['batch_size'])
-        return dataloader
+        if vote:
+            return dataloader, samples_counter_lst
+        else:
+            return dataloader
 
     @classmethod
     def AEinput(cls, path):

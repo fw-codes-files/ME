@@ -309,6 +309,21 @@ def testRotateMatrix():
     eye = np.array([[10,22],[30,34]])
     RotateMatrix, _ = cv2.estimateAffinePartial2D(eye, target)
     print(RotateMatrix)
+def testtensor():
+    a = [torch.tensor([[1],[2],[3],[4]]),torch.tensor([[1],[2],[3],[4]])]
+    print(sum(a))
+    b = torch.zeros((8,7))
+    c = torch.ones((8,7))
+    d = [b,c]
+    d = torch.cat(d)
+    print(d.shape)
+def testtopk():
+    from collections import Counter
+    a = torch.randn((10,7))
+    print(a)
+    b = torch.topk(a, 1, dim=0)[1]
+    print(b)
+    print(torch.argmax(torch.bincount(b[0])))
 if __name__ == '__main__':
-    testRotateMatrix()
+    testtopk()
     pass

@@ -234,6 +234,7 @@ class LSTM_model_traintest(object):
 class Transformer_traintest():
     def __init__(self):
         pass
+
     @classmethod
     def train(cls, fast, epoch):
         from model import EmoTransformer
@@ -249,8 +250,8 @@ class Transformer_traintest():
             optimizer = torch.optim.Adam(trans.parameters(),lr=1e-6, weight_decay=0.05)
             loss_func = torch.nn.CrossEntropyLoss()
             label, feature, lms3d, seqs, label_test, feature_test, lms3d_test, seqs_test = Dataprocess.dataForLSTM(fold, crop=True)
-            train_dataloader = Dataprocess.dataAlign2WindowSize(config['window_size'], feature, lms3d, label, int(config['Sample_frequency']))
-            test_dataloader = Dataprocess.dataAlign2WindowSize(config['window_size'], feature_test, lms3d_test, label_test, int(config['Sample_frequency']))
+            train_dataloader = Dataprocess.dataAlign2WindowSize(config['window_size'], feature, lms3d, label)
+            test_dataloader = Dataprocess.dataAlign2WindowSize(config['window_size'], feature_test, lms3d_test, label_test)
 
             acc = 0
             writer_loss = SummaryWriter(f'./tb/loss/{fold}')
@@ -290,6 +291,7 @@ class Transformer_traintest():
         logging.info(f'{len(f_lst)} folds average acc is {sum(acc_lst) / len(f_lst)}')
         logging.info('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
         send('2070 train result',f'{config["LOG_CHECK"]} \t acc:{sum(acc_lst) / len(f_lst)}')
+
     @classmethod
     def trainBypackage(cls,fast, epoch):
         from vit_pytorch import ViT
@@ -364,9 +366,9 @@ class Transformer_traintest():
             label, feature, lms3d, seqs, label_test, feature_test, lms3d_test, seqs_test = Dataprocess.dataForLSTM(fold, crop=True)
             ae_lms,ae_lms_test = Dataprocess.AE_feature(config['AE_pth_epoch'],config['AE_mid_dim'],fold,seqs,seqs_test)
             train_dataloader = Dataprocess.dataAlign2WindowSize(config['window_size'], feature, ae_lms, label,
-                                                                int(config['Sample_frequency']),use_AE=True)
+                                                               use_AE=True)
             test_dataloader = Dataprocess.dataAlign2WindowSize(config['window_size'], feature_test, ae_lms_test,
-                                                               label_test, int(config['Sample_frequency']),use_AE=True)
+                                                               label_test, use_AE=True)
 
             acc = 0
             writer_loss = SummaryWriter(f'./tb/loss/{fold}')
@@ -423,10 +425,8 @@ class Transformer_traintest():
             optimizer = torch.optim.Adam(trans.parameters(), lr=1e-6, weight_decay=0.05)
             loss_func = torch.nn.CrossEntropyLoss()
             label, feature, lms3d, seqs, label_test, feature_test, lms3d_test, seqs_test = Dataprocess.dataForLSTM(fold, crop=True)
-            train_dataloader = Dataprocess.dataAlign2WindowSize(config['window_size'], feature, lms3d, label,
-                                                                int(config['Sample_frequency']))
-            test_dataloader = Dataprocess.dataAlign2WindowSize(config['window_size'], feature_test, lms3d_test,
-                                                               label_test, int(config['Sample_frequency']))
+            train_dataloader = Dataprocess.dataAlign2WindowSize(config['window_size'], feature, lms3d, label)
+            test_dataloader = Dataprocess.dataAlign2WindowSize(config['window_size'], feature_test, lms3d_test)
 
             acc = 0
             writer_loss = SummaryWriter(f'./tb/loss/{fold}')
@@ -467,6 +467,105 @@ class Transformer_traintest():
         logging.info('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
         logging.info(f'{len(f_lst)} folds average acc is {sum(acc_lst) / len(f_lst)}')
         logging.info('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+
+    @classmethod
+    def voteVit(cls,fast,epoch):
+        from model import EmoTransformer
+        from torch.utils.tensorboard import SummaryWriter
+        softmax = torch.nn.Softmax(dim=1)
+        acc_lst = [0] * 10
+        if fast:
+            f_lst = config['fast_fold']
+        else:
+            f_lst = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        for fold in f_lst:
+            trans = EmoTransformer(input=config['T_input_dim'], nhead=config['T_head_num'],
+                                   num_layers=config['T_block_num'], batch_first=config['T_bs_first'],
+                                   output_dim=config['T_output_dim'])
+            trans.cuda()
+            optimizer = torch.optim.Adam(trans.parameters(), lr=1e-6, weight_decay=0.05)
+            loss_func = torch.nn.CrossEntropyLoss()
+            label, feature, lms3d, seqs, label_test, feature_test, lms3d_test, seqs_test = Dataprocess.dataForLSTM(fold,
+                                                                                                                   crop=True)
+            train_dataloader, train_group_notes = Dataprocess.dataAlign2WindowSize(config['window_size'], feature, lms3d, label,
+                                                                use_AE=False, vote=True)
+            test_dataloader, test_group_notes = Dataprocess.dataAlign2WindowSize(config['window_size'], feature_test, lms3d_test,
+                                                               label_test, use_AE=False, vote=True)
+
+            acc = 0
+            writer_loss = SummaryWriter(f'./tb/loss/{fold}')
+            writer_acc_train = SummaryWriter(f'./tb/acc/train/{fold}')
+            writer_acc_test = SummaryWriter(f'./tb/acc/test/{fold}')
+
+            for e in range(epoch):
+                trans.train()
+                score, score_t, total, total_t = 0, 0, 0, 0
+                train_collection,train_collection_label = [],[]
+                for input, target in train_dataloader:
+                    train_collection_label.append(target)
+                    optimizer.zero_grad()
+                    pred = trans(input)
+                    train_collection.append(pred)
+                    loss = loss_func(pred, target.long())
+                    loss.backward()
+                    optimizer.step()
+                    idx_pred = torch.topk(pred, 1, dim=1)[1]
+                    rs = idx_pred.eq(target.reshape(-1, 1))
+                    score += rs.view(-1).float().sum()
+                    total += input.shape[0]
+                # acc@one sample
+                sacal_loss = loss.detach().cpu()
+                writer_loss.add_scalar('train loss', sacal_loss, e)
+                writer_acc_train.add_scalar('train acc', score / total * 100, e)
+                train_cursor = 0
+                train_correct = 0
+                train_collection = softmax(torch.cat(train_collection))
+                train_collection_label = torch.cat(train_collection_label)
+                for tgn in train_group_notes:
+                    video_pred = train_collection[train_cursor:train_cursor+tgn]
+                    video_label = sum(train_collection_label[train_cursor:train_cursor+tgn])//tgn
+                    train_cursor += tgn
+                    video_idx = torch.topk(video_pred,1, dim=1)[1]
+                    Vid = torch.argmax(torch.bincount(video_idx[0]))
+                    if Vid == video_label:
+                        train_correct+=1
+                print('\r' + f'fold:{fold} epoch:{e} loss:{loss} sample acc:{score / total * 100}%  video acc:{train_correct / len(train_group_notes) * 100}% ', end='', flush=True)
+
+                trans.eval()
+                test_collection, test_collection_label = [],[]
+                for test_input, test_label in test_dataloader:
+                    test_collection_label.append(test_label)
+                    pred = trans(test_input)
+                    test_collection.append(pred)
+                    idx_pred = torch.topk(pred, 1, dim=1)[1]
+                    test_collection.append(pred)
+                    rs = idx_pred.eq(test_label.reshape(-1, 1))
+                    score_t += rs.view(-1).float().sum()
+                    total_t += test_input.shape[0]
+                writer_acc_test.add_scalar('test acc', score_t / total_t * 100, e)
+
+                test_cursor = 0
+                test_correct = 0
+                test_collection = softmax(torch.cat(test_collection))
+                test_collection_label = torch.cat(test_collection_label)
+                for tgn in test_group_notes:
+                    video_pred = test_collection[test_cursor:test_cursor+tgn]
+                    video_label = sum(test_collection_label[test_cursor:test_cursor+tgn])//tgn
+                    test_cursor += tgn
+                    video_idx = torch.topk(video_pred,1, dim=1)[1]
+                    Vid = torch.argmax(torch.bincount(video_idx[0]))
+                    if Vid == video_label:
+                        test_correct+=1
+
+                if acc < test_correct / len(test_group_notes):
+                    acc = test_correct / len(test_group_notes)
+                    acc_lst[fold - 1] = acc
+                    logging.info(f'fold_{fold} epoch_{e} SampleTrainAcc_{score / total * 100}% SampleTestAcc_{score_t / total_t * 100}% VideoTestAcc_{acc} bs_{config["batch_size"]} lr_{config["learning_rate"]} ln_{config["T_block_num"]} hd_{config["T_head_num"]} ws_{config["window_size"]}')
+            logging.info(f'------------------------------------fold{fold} ends-----------------------------------------------')
+        logging.info('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+        logging.info(f'{len(f_lst)} folds average acc is {sum(acc_lst) / len(f_lst)}')
+        logging.info('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+        send('2070 train result', f'{config["LOG_CHECK"]} \t acc:{sum(acc_lst) / len(f_lst)}')
 class AutoEncoder():
     def __init__(self):
         pass
@@ -525,7 +624,7 @@ class AutoEncoder():
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='train function choice')
-    parser.add_argument('-M', default='transformer', type=str, metavar='N',
+    parser.add_argument('-M', default='voteVit', type=str, metavar='N',
                         help='s means single and m means minibatch')
     args = parser.parse_args()
     if args.M == 'single':
@@ -544,5 +643,7 @@ def main():
         Transformer_traintest.AEandViT(True, config['epoch']) # ae dim is related to tsm forward dim
     elif args.M == 'vilt':
         Transformer_traintest.ViLT(True, config['epoch'])
+    elif args.M == 'voteVit':
+        Transformer_traintest.voteVit(True, config['epoch'])
 if __name__ == '__main__':
     main()
