@@ -3,6 +3,8 @@ import time
 
 import numpy as np
 
+import dataProcess
+
 os.environ['CUDA_VISIBLE_DEVICES']='0'
 import torch
 from dataProcess import Dataprocess
@@ -472,7 +474,6 @@ class Transformer_traintest():
     def voteVit(cls,fast,epoch):
         from model import EmoTransformer
         from torch.utils.tensorboard import SummaryWriter
-        softmax = torch.nn.Softmax(dim=1)
         acc_lst = [0] * 10
         if fast:
             f_lst = config['fast_fold']
@@ -485,12 +486,9 @@ class Transformer_traintest():
             trans.cuda()
             optimizer = torch.optim.Adam(trans.parameters(), lr=1e-6, weight_decay=0.05)
             loss_func = torch.nn.CrossEntropyLoss()
-            label, feature, lms3d, seqs, label_test, feature_test, lms3d_test, seqs_test = Dataprocess.dataForLSTM(fold,
-                                                                                                                   crop=True)
-            train_dataloader, train_group_notes = Dataprocess.dataAlign2WindowSize(config['window_size'], feature, lms3d, label,
-                                                                use_AE=False, vote=True)
-            test_dataloader, test_group_notes = Dataprocess.dataAlign2WindowSize(config['window_size'], feature_test, lms3d_test,
-                                                               label_test, use_AE=False, vote=True)
+            label, feature, lms3d, seqs, label_test, feature_test, lms3d_test, seqs_test = Dataprocess.dataForLSTM(fold, crop=True)
+            train_dataloader, train_group_notes = Dataprocess.dataAlign2WindowSize(config['window_size'], feature, lms3d, label, use_AE=False, vote=True)
+            test_dataloader, test_group_notes = Dataprocess.dataAlign2WindowSize(config['window_size'], feature_test, lms3d_test, label_test, use_AE=False, vote=True)
 
             acc = 0
             writer_loss = SummaryWriter(f'./tb/loss/{fold}')
@@ -513,23 +511,12 @@ class Transformer_traintest():
                     rs = idx_pred.eq(target.reshape(-1, 1))
                     score += rs.view(-1).float().sum()
                     total += input.shape[0]
+
                 # acc@one sample
                 sacal_loss = loss.detach().cpu()
                 writer_loss.add_scalar('train loss', sacal_loss, e)
                 writer_acc_train.add_scalar('train acc', score / total * 100, e)
-                train_cursor = 0
-                train_correct = 0
-                train_collection = softmax(torch.cat(train_collection))
-                train_collection_label = torch.cat(train_collection_label)
-                for tgn in train_group_notes:
-                    video_pred = train_collection[train_cursor:train_cursor+tgn]
-                    video_label = sum(train_collection_label[train_cursor:train_cursor+tgn])//tgn
-                    train_cursor += tgn
-                    video_idx = torch.topk(video_pred,1, dim=1)[1]
-                    Vid = torch.argmax(torch.bincount(video_idx[0]))
-                    if Vid == video_label:
-                        train_correct+=1
-                print('\r' + f'fold:{fold} epoch:{e} loss:{loss} sample acc:{score / total * 100}%  video acc:{train_correct / len(train_group_notes) * 100}% ', end='', flush=True)
+                accVideo = dataProcess.Utils.vote(train_collection,train_group_notes,train_collection_label)
 
                 trans.eval()
                 test_collection, test_collection_label = [],[]
@@ -543,24 +530,12 @@ class Transformer_traintest():
                     score_t += rs.view(-1).float().sum()
                     total_t += test_input.shape[0]
                 writer_acc_test.add_scalar('test acc', score_t / total_t * 100, e)
-
-                test_cursor = 0
-                test_correct = 0
-                test_collection = softmax(torch.cat(test_collection))
-                test_collection_label = torch.cat(test_collection_label)
-                for tgn in test_group_notes:
-                    video_pred = test_collection[test_cursor:test_cursor+tgn]
-                    video_label = sum(test_collection_label[test_cursor:test_cursor+tgn])//tgn
-                    test_cursor += tgn
-                    video_idx = torch.topk(video_pred,1, dim=1)[1]
-                    Vid = torch.argmax(torch.bincount(video_idx[0]))
-                    if Vid == video_label:
-                        test_correct+=1
-
-                if acc < test_correct / len(test_group_notes):
-                    acc = test_correct / len(test_group_notes)
+                print('\r')
+                accVideo_t = dataProcess.Utils.vote(train_collection, train_group_notes, train_collection_label)
+                if acc < accVideo_t:
+                    acc = accVideo_t
                     acc_lst[fold - 1] = acc
-                    logging.info(f'fold_{fold} epoch_{e} SampleTrainAcc_{score / total * 100}% SampleTestAcc_{score_t / total_t * 100}% VideoTestAcc_{acc} bs_{config["batch_size"]} lr_{config["learning_rate"]} ln_{config["T_block_num"]} hd_{config["T_head_num"]} ws_{config["window_size"]}')
+                    logging.info(f'fold_{fold} epoch_{e} SampleTrainAcc_{score / total * 100}% SampleTestAcc_{score_t / total_t * 100}% VideoTrainAcc_{accVideo * 100}% VideoTestAcc_{acc*100}% bs_{config["batch_size"]} lr_{config["learning_rate"]} ln_{config["T_block_num"]} hd_{config["T_head_num"]} ws_{config["window_size"]}')
             logging.info(f'------------------------------------fold{fold} ends-----------------------------------------------')
         logging.info('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
         logging.info(f'{len(f_lst)} folds average acc is {sum(acc_lst) / len(f_lst)}')

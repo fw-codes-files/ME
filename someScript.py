@@ -318,12 +318,21 @@ def testtensor():
     d = torch.cat(d)
     print(d.shape)
 def testtopk():
-    from collections import Counter
-    a = torch.randn((10,7))
-    print(a)
-    b = torch.topk(a, 1, dim=0)[1]
-    print(b)
-    print(torch.argmax(torch.bincount(b[0])))
+    a = torch.tensor((1,1,1))
+    b = torch.topk(a,2,dim=0)[1]
+    print(a, b)
+def voteunitest():
+    from dataProcess import Utils
+    a = [torch.rand((3,7)),torch.rand((1,7)),torch.rand((2,7))]
+    print(a[0])
+    print(a[1])
+    print(a[2])
+    b = [0,0,0,1,2,2]
+    c = [3,1,2]
+    Utils.vote(a,c,b)
+def testtesnor():
+    a = torch.tensor([True,False,True,False,True])
+    print(a.device)
 if __name__ == '__main__':
-    testtopk()
+    testtesnor()
     pass

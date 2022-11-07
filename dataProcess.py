@@ -22,7 +22,7 @@ config = yaml.safe_load(open('./config.yaml'))
 EOS = np.zeros((1, config['T_input_dim']))  # padding of origin 3d lms data sequence
 AE_EOS = np.zeros((1, config['AE_mid_dim']))  # padding of AE mid feature sequence
 standardImg = cv2.imread('./img.png')  # used to through 3DDFA net, then pointcloud produced by this picture will be a standard face pose. All face pose will be aligned to this face's pointcloud pose
-
+softmax = torch.nn.Softmax(dim=1)
 
 class LSTMDataSet(data.Dataset):
     '''
@@ -346,6 +346,57 @@ class Utils():
         t = p0c.T - R @ p1c.T
         return R, t
 
+    @classmethod
+    def vote(cls, pred_collection, group_notes, label):
+        '''
+            args:
+                pred_collection: origin prediction of model. list[tensor(8,7)]
+                group_notes: how many samples belongs to a video. list[int]
+                label: ground truth.list[long]
+                addOrcount: way of voting, 0 means by adding, 1 means by counting
+            return:
+                acc: original video accuracy
+        '''
+        acc = 0
+        pred_collection = torch.cat(pred_collection) # tensor (samples,7)
+        label = torch.cat(label)
+        idx = 0
+        for gn in group_notes:
+            sample_belong_aVideo0 = pred_collection[idx:gn+idx] #(1~16,7)
+            video_label = sum(label[idx:gn+idx]) // gn #(1,)
+            idx+=gn
+            '''
+                1. just add all samples then topk, but as an example s0=[0.9,0.1,0,0,0,0,0] s1=[0.1,0.1,0.1,0.1,0.1,0.1,0.4] and label is 6, there will be a wrong vote result
+                2. just count every sample result then topk, bue as an example c=[2,2,1,1,1,0,0] and label is 2, there will be a wrong result
+                3. count first and add, tokp is no more needed. theoretically, 60%-70% accuracy of samples will lead to a correct video classification result.
+            '''
+            sample_belong_aVideo = torch.topk(sample_belong_aVideo0,1,dim=1)[1] #(samples,1),sample level predictions
+            table = torch.zeros((1,7))
+            for s in sample_belong_aVideo:
+                table[0,s] +=1
+            most_pre = torch.topk(table,1,dim=1)[0]
+            a = table==most_pre
+            pre_conf,final_pre = None,None
+            if torch.sum(a.float()) > 1:
+                indx = torch.nonzero(a).cuda()
+                for i in indx:
+                    vec = torch.zeros((1,7)).cuda()
+                    for sidx,sb in enumerate(sample_belong_aVideo):
+                        if i[1] == sb:
+                            vec += sample_belong_aVideo0[sidx]
+                    if pre_conf is None:
+                        pre_conf = vec[0,i[1]]
+                        final_pre = i[1]
+                    else:
+                        if pre_conf < vec[0,i[1]]:
+                            pre_conf = vec[0,i[1]]
+                            final_pre = i[1]
+            else:
+                final_pre = torch.topk(table,1,dim=1)[1]
+            final_pre_c = final_pre.cuda()
+            if final_pre_c == video_label:
+                acc += 1
+        return acc / len(group_notes)
 
 class Dataprocess():
     def __init__(self):
@@ -625,7 +676,7 @@ class Dataprocess():
         # dataset and dataloader
         dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)).cuda(),
                               torch.from_numpy(np.array(data, dtype=np.float32)).cuda())
-        dataloader = torch.utils.data.DataLoader(dataset, shuffle=True, batch_size=config['batch_size'])
+        dataloader = torch.utils.data.DataLoader(dataset, shuffle=False, batch_size=config['batch_size'])
         if vote:
             return dataloader, samples_counter_lst
         else:
