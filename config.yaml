@@ -55,6 +55,7 @@ Least_frame: 15
 Max_frame: 40
 window_size: 25
 Sample_frequency: 1
+Shuffle: True
 # LSTM config
 LSTM_input_dim: 204
 LSTM_hidden_dim: 512
@@ -67,6 +68,7 @@ T_block_num: 6
 T_head_num: 8
 T_proj_dim: 2048
 T_forward_dim: 2048
+T_masked: True
 T_activation: 'gelu'
 T_output_dim: 7
 T_bs_first: True
@@ -77,7 +79,7 @@ AE_loss_train: './tb/loss/AE/train/'
 AE_loss_test: './tb/loss/AE/test/'
 AE_mid_dim: 8
 AE_pth_epoch: 6000
-#ViLT config
+# ViLT config
 ViLT_model_type: 2
 ViLT_embedding_dim: 64
 ViLT_block_num: 12
@@ -92,8 +94,8 @@ batch_size: 8
 learning_rate: 1e-6
 epoch: 2000
 fast_fold: [1,5,9]
+# data Post process config
+vote: False
 # log information config
-LOG_CHECK: '!!!ViT: 3dlms, [1,5,9] fold, MLP[cls], 8 head, learnable PE, gelu, 2000 epoch, 6 block, 2048 forward dim,2048 input embedding,vote!!!'
-#LOG_CHECK: '!!!AE: 3dlms, all ck+ dataset , check net!!!'
-#LOG_CHECK: '!!!Attention: rgb feature, fast fold, forward dim 512, MLP[cls], 8 head, 2 encoder, learnable PE, gelu, 1000 epoch for test!!!'
+LOG_CHECK: '!!!ViT: 3dlms, [1,5,9] fold, MLP[cls], 8 head, learnable PE, gelu, 2000 epoch, 6 block, 2048 forward dim, 2048 input embedding, 25 ws, 8 bs, masked, shuffle True !!!'
 LOG_pth: 'train.log'

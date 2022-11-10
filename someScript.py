@@ -333,6 +333,10 @@ def voteunitest():
 def testtesnor():
     a = torch.tensor([True,False,True,False,True])
     print(a.device)
+def testtensor():
+    a = torch.tensor(123,device='cuda')
+    b = a.item()
+    print(b.device)
 if __name__ == '__main__':
     testtesnor()
     pass

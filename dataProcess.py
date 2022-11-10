@@ -29,13 +29,17 @@ class LSTMDataSet(data.Dataset):
         this class has no problem, just convert data to dataset
     '''
 
-    def __init__(self, label, concat_features):
+    def __init__(self, label, concat_features, video_indexes = None):
         self.target = label
         self.input = concat_features
-
+        self.vidx = None
+        if video_indexes is not None:
+            self.vidx = video_indexes
     def __getitem__(self, idx):
-        return self.input[idx], self.target[idx]
-
+        if self.vidx is not None:
+            return self.input[idx], self.target[idx], self.vidx[idx]
+        else:
+            return self.input[idx], self.target[idx]
     def __len__(self):
         return self.target.shape[0]
 
@@ -360,42 +364,78 @@ class Utils():
         acc = 0
         pred_collection = torch.cat(pred_collection) # tensor (samples,7)
         label = torch.cat(label)
-        idx = 0
-        for gn in group_notes:
-            sample_belong_aVideo0 = pred_collection[idx:gn+idx] #(1~16,7)
-            video_label = sum(label[idx:gn+idx]) // gn #(1,)
-            idx+=gn
-            '''
-                1. just add all samples then topk, but as an example s0=[0.9,0.1,0,0,0,0,0] s1=[0.1,0.1,0.1,0.1,0.1,0.1,0.4] and label is 6, there will be a wrong vote result
-                2. just count every sample result then topk, bue as an example c=[2,2,1,1,1,0,0] and label is 2, there will be a wrong result
-                3. count first and add, tokp is no more needed. theoretically, 60%-70% accuracy of samples will lead to a correct video classification result.
-            '''
-            sample_belong_aVideo = torch.topk(sample_belong_aVideo0,1,dim=1)[1] #(samples,1),sample level predictions
+        group_notes = torch.cat(group_notes)
+        max_index = torch.max(group_notes)
+
+        for m in range(int(max_index.item())):
+            m_m = group_notes==m
+            pred_collection_m = pred_collection[m_m] # (sample number, 7)
+            label_m = label[m_m] # pick data by video index
+            pred_cls = torch.topk(pred_collection_m, 1, dim=1)[1]
             table = torch.zeros((1,7))
-            for s in sample_belong_aVideo:
-                table[0,s] +=1
-            most_pre = torch.topk(table,1,dim=1)[0]
-            a = table==most_pre
-            pre_conf,final_pre = None,None
+            for pc in pred_cls:
+                table[0,pc]+=1
+            most_pre = torch.topk(table, 1, dim=1)[0]
+            a = table == most_pre
+            pre_conf, final_pre = None, None
             if torch.sum(a.float()) > 1:
                 indx = torch.nonzero(a).cuda()
                 for i in indx:
-                    vec = torch.zeros((1,7)).cuda()
-                    for sidx,sb in enumerate(sample_belong_aVideo):
-                        if i[1] == sb:
-                            vec += sample_belong_aVideo0[sidx]
+                    vec = torch.zeros((1, 7)).cuda()
+                    for sidx, sb in enumerate(pred_cls):
+                        if i[1] == sb[0]:
+                            vec += pred_collection_m[sidx]
                     if pre_conf is None:
-                        pre_conf = vec[0,i[1]]
+                        pre_conf = vec[0, i[1]]
                         final_pre = i[1]
                     else:
-                        if pre_conf < vec[0,i[1]]:
-                            pre_conf = vec[0,i[1]]
+                        if pre_conf < vec[0, i[1]]:
+                            pre_conf = vec[0, i[1]]
                             final_pre = i[1]
+                        else:
+                            pass
             else:
-                final_pre = torch.topk(table,1,dim=1)[1]
+                final_pre = torch.topk(table, 1, dim=1)[1]
             final_pre_c = final_pre.cuda()
-            if final_pre_c == video_label:
+            if final_pre_c == label_m[0]:
                 acc += 1
+        # idx = 0
+        # for gn in group_notes:
+        #     sample_belong_aVideo0 = pred_collection[idx:gn+idx] #(1~16,7)
+        #     video_label = sum(label[idx:gn+idx]) // gn #(1,)
+        #     idx+=gn
+        #     '''
+        #         1. just add all samples then topk, but as an example s0=[0.9,0.1,0,0,0,0,0] s1=[0.1,0.1,0.1,0.1,0.1,0.1,0.4] and label is 6, there will be a wrong vote result.
+        #         2. just count every sample result then topk, bue as an example c=[2,2,1,1,1,0,0] and label is 2, there will be a wrong result.
+        #         3. count first and add, tokp is no more needed. theoretically, 60%-70% accuracy of samples will lead to a correct video classification result.
+        #         A disgusting piece of code
+        #     '''
+        #     sample_belong_aVideo = torch.topk(sample_belong_aVideo0,1,dim=1)[1] #(samples,1),sample level predictions
+        #     table = torch.zeros((1,7))
+        #     for s in sample_belong_aVideo:
+        #         table[0,s] +=1
+        #     most_pre = torch.topk(table,1,dim=1)[0]
+        #     a = table==most_pre
+        #     pre_conf,final_pre = None,None
+        #     if torch.sum(a.float()) > 1:
+        #         indx = torch.nonzero(a).cuda()
+        #         for i in indx:
+        #             vec = torch.zeros((1,7)).cuda()
+        #             for sidx,sb in enumerate(sample_belong_aVideo):
+        #                 if i[1] == sb:
+        #                     vec += sample_belong_aVideo0[sidx]
+        #             if pre_conf is None:
+        #                 pre_conf = vec[0,i[1]]
+        #                 final_pre = i[1]
+        #             else:
+        #                 if pre_conf < vec[0,i[1]]:
+        #                     pre_conf = vec[0,i[1]]
+        #                     final_pre = i[1]
+        #     else:
+        #         final_pre = torch.topk(table,1,dim=1)[1]
+        #     final_pre_c = final_pre.cuda()
+        #     if final_pre_c == video_label:
+        #         acc += 1
         return acc / len(group_notes)
 
 class Dataprocess():
@@ -639,7 +679,6 @@ class Dataprocess():
         for f in range(0, feature.shape[0]):  # video level
             '''this is normalization,  However,3d lms will be a circle in space, 
                 it seems lost much information, so stop normalization for now.'''
-            SC = 0
             # f_mean = np.mean(feature[f][:,:512], axis=1)
             # f_std = np.std(feature[f][:,:512], axis=1)
             # feature[f][:,:512] = (feature[f][:,:512] - f_mean.reshape(-1, 1)) / f_std.reshape(-1, 1)
@@ -662,25 +701,26 @@ class Dataprocess():
                 data.append(video)
                 target.append(label[f][0][0])
                 if vote:
-                    samples_counter_lst.append(1)
+                    samples_counter_lst.append(f)
             else:
                 #  one video generates more shape[0] - ws samples
                 for w in range(ori_video.shape[0] - ws + 1):
                     sample = ori_video[w:w + config['window_size']]
                     data.append(sample)
                     target.append(label[f][0][0].astype(np.long))
-                    SC += 1
-                if vote:
-                    samples_counter_lst.append(SC)
-            SC = 0
+                    if vote:
+                        samples_counter_lst.append(f)
         # dataset and dataloader
-        dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)).cuda(),
-                              torch.from_numpy(np.array(data, dtype=np.float32)).cuda())
-        dataloader = torch.utils.data.DataLoader(dataset, shuffle=False, batch_size=config['batch_size'])
         if vote:
-            return dataloader, samples_counter_lst
+            dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)).cuda(),
+                                  torch.from_numpy(np.array(data, dtype=np.float32)).cuda(),
+                                  torch.from_numpy(np.array(samples_counter_lst, dtype=np.float32)).cuda())
         else:
-            return dataloader
+            dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)).cuda(),
+                                  torch.from_numpy(np.array(data, dtype=np.float32)).cuda())
+        dataloader = torch.utils.data.DataLoader(dataset, shuffle=config['Shuffle'], batch_size=config['batch_size'])
+
+        return dataloader
 
     @classmethod
     def AEinput(cls, path):
@@ -774,9 +814,9 @@ if __name__ == '__main__':
     # Dataprocess.deleleDS_Store()
     # CK+数据加载
     # Dataprocess.loadCKPlusData(1)
-    for i in range(1, 11):
-        print(i)
-        Dataprocess.loadCKPlusData(i)
+    # for i in range(1, 11):
+    #     print(i)
+    #     Dataprocess.loadCKPlusData(i)
     # 得到dataset用于训练
     # rs = Dataprocess.dataForLSTM(1, crop=True)
     # Dataprocess.dataAlign2WindowSize(config['window_size'], rs[1], rs[2], rs[0])
