@@ -264,7 +264,7 @@ class Transformer_traintest():
                 score,score_t,total,total_t = 0,0,0,0
                 for input, target in train_dataloader:
                     optimizer.zero_grad()
-                    pred = trans(input)
+                    pred = trans(input, config['T_masked'])
                     loss = loss_func(pred,target.long())
                     loss.backward()
                     optimizer.step()
@@ -278,7 +278,7 @@ class Transformer_traintest():
                 writer_acc_train.add_scalar('train acc',score / total * 100,e)
                 trans.eval()
                 for test_input, test_label in test_dataloader:
-                    pred = trans(test_input)
+                    pred = trans(test_input, config['T_masked'])
                     idx_pred = torch.topk(pred, 1, dim=1)[1]
                     rs = idx_pred.eq(test_label.reshape(-1, 1))
                     score_t += rs.view(-1).float().sum()
