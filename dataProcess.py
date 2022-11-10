@@ -372,7 +372,7 @@ class Utils():
             pred_collection_m = pred_collection[m_m] # (sample number, 7)
             label_m = label[m_m] # pick data by video index
             pred_cls = torch.topk(pred_collection_m, 1, dim=1)[1]
-            table = torch.zeros((1,7))
+            table = torch.zeros((1,7)).cuda()
             for pc in pred_cls:
                 table[0,pc]+=1
             most_pre = torch.topk(table, 1, dim=1)[0]
