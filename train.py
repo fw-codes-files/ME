@@ -276,6 +276,20 @@ class Transformer_traintest():
                 writer_loss.add_scalar('train loss',sacal_loss,e)
                 print('\r' + f'fold:{fold} epoch:{e} loss:{loss} acc:{score / total * 100}% ', end='', flush=True)
                 writer_acc_train.add_scalar('train acc',score / total * 100,e)
+                if e%5 == 0:
+                    checkpoints = {'model_type':'ViT',
+                                   'epoch':e,
+                                   'bs':config["batch_size"],
+                                   'lr':config["learning_rate"],
+                                   'ln':config["T_block_num"],
+                                   'hd':config["T_head_num"],
+                                   'ws':config["window_size"],
+                                   'mask':config["T_masked"],
+                                   'input_dim':config["T_input_dim"],
+                                   'proj_dim':config["T_proj_dim"],
+                                   'forward_dim':config["T_forward_dim"],
+                                   'state_dict':trans.parameters()}
+                    torch.save(checkpoints,f'./{fold}_{time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())}.pkl')
                 trans.eval()
                 for test_input, test_label in test_dataloader:
                     pred = trans(test_input, config['T_masked'])
@@ -549,6 +563,69 @@ class Transformer_traintest():
         logging.info(f'{len(f_lst)} folds average acc is {sum(acc_lst) / len(f_lst)}')
         logging.info('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
         send('2070 train result', f'{config["LOG_CHECK"]} \t acc:{sum(acc_lst) / len(f_lst)}')
+
+    @classmethod
+    def train8Folds4ValAndTest(cls, epoch):
+        from model import EmoTransformer
+        from torch.utils.tensorboard import SummaryWriter
+        acc_lst = [0] * 10
+        f_lst = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        for fold in f_lst:
+            cop_lst = f_lst.copy()
+            trans = EmoTransformer(input=config['T_input_dim'], nhead=config['T_head_num'], num_layers=config['T_block_num'], batch_first=config['T_bs_first'], output_dim=config['T_output_dim'])
+            trans.cuda()
+            optimizer = torch.optim.Adam(trans.parameters(), lr=1e-6, weight_decay=0.05)
+            loss_func = torch.nn.CrossEntropyLoss()
+            cop_lst.remove(fold)
+            cop_lst.remove(11-fold)
+            label, lms3d, feature, seqs = np.zeros((0,)), np.zeros((0,)), np.zeros((0,)), np.zeros((0,))
+            for c in cop_lst:
+                train_label_c, train_feature_c, train_lms3d_c, train_seqs_c = Dataprocess.loadSingleFold(c, True)
+                label = np.concatenate((label, train_label_c))
+                lms3d = np.concatenate((lms3d, train_lms3d_c))
+                feature = np.concatenate((feature, train_feature_c))
+                seqs = np.concatenate((seqs, train_seqs_c))
+
+            train_dataloader = Dataprocess.dataAlign2WindowSize(config['window_size'], feature, lms3d, label,False,False)
+
+            writer_loss = SummaryWriter(f'./tb/loss/{fold}')
+            writer_acc_train = SummaryWriter(f'./tb/acc/train/{fold}')
+            for e in range(epoch):
+                trans.train()
+                score, score_t, total, total_t = 0, 0, 0, 0
+                for input, target in train_dataloader:
+                    optimizer.zero_grad()
+                    pred = trans(input, config['T_masked'])
+                    loss = loss_func(pred, target.long())
+                    loss.backward()
+                    optimizer.step()
+                    idx_pred = torch.topk(pred, 1, dim=1)[1]
+                    rs = idx_pred.eq(target.reshape(-1, 1))
+                    score += rs.view(-1).float().sum()
+                    total += input.shape[0]
+                sacal_loss = loss.detach().cpu()
+                writer_loss.add_scalar('train loss', sacal_loss, e)
+                print('\r' + f'fold:{fold} epoch:{e} loss:{loss} acc:{score / total * 100}% ', end='', flush=True)
+                writer_acc_train.add_scalar('train acc', score / total * 100, e)
+                if e % 5 == 0:
+                    checkpoints = {'model_type': 'ViT',
+                                   'epoch':e,
+                                   'bs': config["batch_size"],
+                                   'lr': config["learning_rate"],
+                                   'ln': config["T_block_num"],
+                                   'hd': config["T_head_num"],
+                                   'ws': config["window_size"],
+                                   'mask': config["T_masked"],
+                                   'input_dim': config["T_input_dim"],
+                                   'proj_dim': config["T_proj_dim"],
+                                   'forward_dim': config["T_forward_dim"],
+                                   'state_dict': trans.state_dict()}
+                    torch.save(checkpoints, f'./{fold}_{time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())}.pkl')
+                logging.info(f'------------------------------------fold{fold} ends-----------------------------------------------')
+        logging.info('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+        logging.info(f'{len(f_lst)} folds average acc is {sum(acc_lst) / len(f_lst)}')
+        logging.info('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+        send('2070 train result', f'{config["LOG_CHECK"]} \t acc:{sum(acc_lst) / len(f_lst)}')
 class AutoEncoder():
     def __init__(self):
         pass
@@ -607,7 +684,7 @@ class AutoEncoder():
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='train function choice')
-    parser.add_argument('-M', default='voteVit', type=str, metavar='N',
+    parser.add_argument('-M', default='84', type=str, metavar='N',
                         help='s means single and m means minibatch')
     args = parser.parse_args()
     if args.M == 'single':
@@ -628,5 +705,7 @@ def main():
         Transformer_traintest.ViLT(True, config['epoch'])
     elif args.M == 'voteVit':
         Transformer_traintest.voteVit(True, config['epoch'])
+    elif args.M == '84':
+        Transformer_traintest.train8Folds4ValAndTest(config['epoch'])
 if __name__ == '__main__':
     main()

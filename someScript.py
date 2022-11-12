@@ -337,6 +337,13 @@ def testtensor():
     a = torch.tensor(123,device='cuda')
     b = a.item()
     print(b.device)
+def testlistrm():
+    f_lst = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    for a in range(1,11):
+        ori = f_lst.copy()
+        ori.remove(a)
+        ori.remove(11-a)
+        print(ori,a,11-a)
 if __name__ == '__main__':
-    testtesnor()
+    testlistrm()
     pass

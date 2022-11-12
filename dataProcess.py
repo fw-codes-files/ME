@@ -362,6 +362,7 @@ class Utils():
                 acc: original video accuracy
         '''
         acc = 0
+        denominator = len(group_notes)
         pred_collection = torch.cat(pred_collection) # tensor (samples,7)
         label = torch.cat(label)
         group_notes = torch.cat(group_notes)
@@ -399,44 +400,7 @@ class Utils():
             final_pre_c = final_pre.cuda()
             if final_pre_c == label_m[0]:
                 acc += 1
-        # idx = 0
-        # for gn in group_notes:
-        #     sample_belong_aVideo0 = pred_collection[idx:gn+idx] #(1~16,7)
-        #     video_label = sum(label[idx:gn+idx]) // gn #(1,)
-        #     idx+=gn
-        #     '''
-        #         1. just add all samples then topk, but as an example s0=[0.9,0.1,0,0,0,0,0] s1=[0.1,0.1,0.1,0.1,0.1,0.1,0.4] and label is 6, there will be a wrong vote result.
-        #         2. just count every sample result then topk, bue as an example c=[2,2,1,1,1,0,0] and label is 2, there will be a wrong result.
-        #         3. count first and add, tokp is no more needed. theoretically, 60%-70% accuracy of samples will lead to a correct video classification result.
-        #         A disgusting piece of code
-        #     '''
-        #     sample_belong_aVideo = torch.topk(sample_belong_aVideo0,1,dim=1)[1] #(samples,1),sample level predictions
-        #     table = torch.zeros((1,7))
-        #     for s in sample_belong_aVideo:
-        #         table[0,s] +=1
-        #     most_pre = torch.topk(table,1,dim=1)[0]
-        #     a = table==most_pre
-        #     pre_conf,final_pre = None,None
-        #     if torch.sum(a.float()) > 1:
-        #         indx = torch.nonzero(a).cuda()
-        #         for i in indx:
-        #             vec = torch.zeros((1,7)).cuda()
-        #             for sidx,sb in enumerate(sample_belong_aVideo):
-        #                 if i[1] == sb:
-        #                     vec += sample_belong_aVideo0[sidx]
-        #             if pre_conf is None:
-        #                 pre_conf = vec[0,i[1]]
-        #                 final_pre = i[1]
-        #             else:
-        #                 if pre_conf < vec[0,i[1]]:
-        #                     pre_conf = vec[0,i[1]]
-        #                     final_pre = i[1]
-        #     else:
-        #         final_pre = torch.topk(table,1,dim=1)[1]
-        #     final_pre_c = final_pre.cuda()
-        #     if final_pre_c == video_label:
-        #         acc += 1
-        return acc / len(group_notes)
+        return acc / denominator
 
 class Dataprocess():
     def __init__(self):
@@ -806,7 +770,21 @@ class Dataprocess():
         _, sp_test_feature = Utils.insertOrSample(split_test.astype(np.int_), test_feature.astype(np.float32))
         return sp_train_feature, sp_test_feature
 
+    @classmethod
+    def loadSingleFold(cls, fold, crop):
+        label_test = np.loadtxt(f'./dataset/label_fold{fold}_test.txt').reshape(-1, 1)
+        test = np.loadtxt(f'./dataset/fan_feature_fold{fold}_test.txt')
+        lms3d_test = np.loadtxt(f'./dataset/3dlms_fold{fold}_test.txt')
+        split_test = np.loadtxt(f'./dataset/split_{fold}_test.txt')
+        if crop:
 
+            test_seqs, test_l = Utils.insertOrSample(split_test.astype(np.int_), label_test.astype(np.float32))
+            _, test_feature = Utils.insertOrSample(split_test.astype(np.int_), test.astype(np.float32))
+            _, test_lms3d = Utils.insertOrSample(split_test.astype(np.int_), lms3d_test.astype(np.float32).reshape(-1, 204))
+
+            return test_l, test_feature, test_lms3d, test_seqs
+        else:
+            return label_test, test, lms3d_test, split_test
 if __name__ == '__main__':
     # 高清视频社区的素材
     # Dataprocess.datasetProcess('E:/lstm_data4train')
