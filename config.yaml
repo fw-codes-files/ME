@@ -90,10 +90,11 @@ ViLT_output_dim: 7
 ViLT_bs_first: True
 # model config
 use_cuda: True
-batch_size: 8
+batch_size: 32
 learning_rate: 1e-6
 epoch: 2000
 fast_fold: [1,5,9]
+test_fold: 5
 # data Post process config
 vote: False
 # log information config

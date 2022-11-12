@@ -362,7 +362,6 @@ class Utils():
                 acc: original video accuracy
         '''
         acc = 0
-        denominator = len(group_notes)
         pred_collection = torch.cat(pred_collection) # tensor (samples,7)
         label = torch.cat(label)
         group_notes = torch.cat(group_notes)
@@ -400,7 +399,7 @@ class Utils():
             final_pre_c = final_pre.cuda()
             if final_pre_c == label_m[0]:
                 acc += 1
-        return acc / denominator
+        return acc / (max_index + 1)
 
 class Dataprocess():
     def __init__(self):
