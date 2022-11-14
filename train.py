@@ -583,7 +583,7 @@ class Transformer_traintest():
             feature = np.concatenate((feature, train_feature_c))
             seqs = np.concatenate((seqs, train_seqs_c))
 
-        train_dataloader = Dataprocess.dataAlign2WindowSize(config['window_size'], feature, lms3d, label,False,False)
+        train_dataloader = Dataprocess.dataAlign2WindowSize(config['window_size'], feature, lms3d, label, False, False)
 
         writer_loss = SummaryWriter(f'./tb/loss/train/')
         writer_acc_train = SummaryWriter(f'./tb/acc/train/')
@@ -619,6 +619,70 @@ class Transformer_traintest():
                                'state_dict': trans.state_dict()}
                 torch.save(checkpoints, f'./{config["test_fold"]}test_{11 - config["test_fold"]}val_{time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())}.pkl')
             logging.info(f'------------------------------------train ends, train folds:1,2,3,4,7,8,9,10-----------------------------------------------')
+        send('2070 train result', f'{config["LOG_CHECK"]}')
+
+    @classmethod
+    def linearVote(cls, epoch): # useless
+        from model import EmoTransformer
+        from torch.utils.tensorboard import SummaryWriter
+        f_lst = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        trans = EmoTransformer(input=config['T_input_dim'], nhead=config['T_head_num'],
+                               num_layers=config['T_block_num'], batch_first=config['T_bs_first'],
+                               output_dim=config['T_output_dim'])
+        trans.cuda()
+        optimizer = torch.optim.Adam(trans.parameters(), lr=1e-6, weight_decay=0.05)
+        loss_func = torch.nn.CrossEntropyLoss()
+        f_lst.remove(config['test_fold'])
+        f_lst.remove(11 - config['test_fold'])
+        label, lms3d, feature, seqs = np.zeros((0,)), np.zeros((0,)), np.zeros((0,)), np.zeros((0,))
+        for c in f_lst:
+            train_label_c, train_feature_c, train_lms3d_c, train_seqs_c = Dataprocess.loadSingleFold(c, True)
+            label = np.concatenate((label, train_label_c))
+            lms3d = np.concatenate((lms3d, train_lms3d_c))
+            feature = np.concatenate((feature, train_feature_c))
+            seqs = np.concatenate((seqs, train_seqs_c))
+
+        train_dataloader = Dataprocess.dataAlign2WindowSize(config['window_size'], feature, lms3d, label, False, True)
+
+        writer_loss = SummaryWriter(f'./tb/loss/train/')
+        writer_acc_train = SummaryWriter(f'./tb/acc/train/')
+        pred_lst, label_lst, belong_lst = [], [], []
+        for e in range(epoch):
+            trans.train()
+            score, total = 0, 0
+            for input, target, attribution in train_dataloader:
+                label_lst.append(target)
+                optimizer.zero_grad()
+                pred = trans(input, config['T_masked'])
+
+                loss = loss_func(pred, target.long())
+                loss.backward()
+                optimizer.step()
+                idx_pred = torch.topk(pred, 1, dim=1)[1]
+                rs = idx_pred.eq(target.reshape(-1, 1))
+                score += rs.view(-1).float().sum()
+                total += input.shape[0]
+            sacal_loss = loss.detach().cpu()
+            writer_loss.add_scalar('train loss', sacal_loss, e)
+            print('\r' + f'epoch:{e} loss:{loss} acc:{score / total * 100}% ', end='', flush=True)
+            writer_acc_train.add_scalar('train acc', score / total * 100, e)
+            if e % 5 == 0:
+                checkpoints = {'model_type': 'ViT',
+                               'epoch': e,
+                               'bs': config["batch_size"],
+                               'lr': config["learning_rate"],
+                               'ln': config["T_block_num"],
+                               'hd': config["T_head_num"],
+                               'ws': config["window_size"],
+                               'mask': config["T_masked"],
+                               'input_dim': config["T_input_dim"],
+                               'proj_dim': config["T_proj_dim"],
+                               'forward_dim': config["T_forward_dim"],
+                               'state_dict': trans.state_dict()}
+                torch.save(checkpoints,
+                           f'./{config["test_fold"]}test_{11 - config["test_fold"]}val_{time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())}.pkl')
+            logging.info(
+                f'------------------------------------train ends, train folds:1,2,3,4,7,8,9,10-----------------------------------------------')
         send('2070 train result', f'{config["LOG_CHECK"]}')
 class AutoEncoder():
     def __init__(self):
@@ -681,15 +745,15 @@ def main():
     parser.add_argument('-M', default='84', type=str, metavar='N',
                         help='s means single and m means minibatch')
     args = parser.parse_args()
-    if args.M == 'single':
+    if args.M == 'single': # lstm train with bs=1
         LSTM_model_traintest.train_single_vedio()
-    elif args.M == 'mini':
+    elif args.M == 'mini': # lstm train with mini bs
         LSTM_model_traintest.train_mini_batch()
-    elif args.M == 'attention':
+    elif args.M == 'attention': # lstm with attention
         LSTM_model_traintest.train_justNfolds(cut=False, epoch=config['epoch'], fast=False)
-    elif args.M == 'transformer':
+    elif args.M == 'transformer': # origin vit
         Transformer_traintest.train(True, config['epoch'])
-    elif args.M == 'p_transformer':
+    elif args.M == 'p_transformer': # packaged vit
         Transformer_traintest.trainBypackage(True,config['epoch'])
     elif args.M == 'ae':
         AutoEncoder.train()
@@ -697,9 +761,11 @@ def main():
         Transformer_traintest.AEandViT(True, config['epoch']) # ae dim is related to tsm forward dim
     elif args.M == 'vilt':
         Transformer_traintest.ViLT(True, config['epoch'])
-    elif args.M == 'voteVit':
+    elif args.M == 'voteVit': # train and test in one epoch and vote
         Transformer_traintest.voteVit(True, config['epoch'])
-    elif args.M == '84':
+    elif args.M == '84': # set val dateset and test data set
         Transformer_traintest.train8Folds4ValAndTest(config['epoch'])
+    elif args.M == 'linearVote': # model changed vote into linear
+        Transformer_traintest.linearVote(config['epoch'])
 if __name__ == '__main__':
     main()
