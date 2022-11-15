@@ -1,3 +1,5 @@
+import os
+
 import dataProcess
 import logging
 from torch.utils.tensorboard import SummaryWriter
@@ -98,6 +100,20 @@ class Modeltest(object):
                         logging.info(
                             f'vote highest:{acc_hat * 100}% when acc is {score / total * 100}%, epoch is {checkpoint["epoch"]}')
                     print('epoch:', checkpoint['epoch'], (score / total).item(), " ", vote_acc.item())
+
+def deleteStaticDict(pth,epoch):
+    import torch
+    dict_lst = os.listdir(pth)
+    delete_lst = []
+    for d in dict_lst:
+        dict_pth = os.path.join((pth, d))
+        checkpoint = torch.load(dict_pth)
+        if checkpoint['epoch'] == epoch:
+            pass
+        else:
+            delete_lst.append(dict_pth)
+    for dele in delete_lst:
+        os.remove(dele)
 if __name__ == '__main__':
     # Modeltest.val(5)
     Modeltest.test(890,5)
