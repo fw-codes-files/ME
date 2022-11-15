@@ -109,6 +109,7 @@ def deleteStaticDict(pth,epoch):
         dict_pth = os.path.join((pth, d))
         checkpoint = torch.load(dict_pth)
         if checkpoint['epoch'] == epoch:
+            print(f'keep dict {dict_pth}')
             pass
         else:
             delete_lst.append(dict_pth)
@@ -116,4 +117,5 @@ def deleteStaticDict(pth,epoch):
         os.remove(dele)
 if __name__ == '__main__':
     # Modeltest.val(5)
-    Modeltest.test(890,5)
+    # Modeltest.test(890,5)
+    deleteStaticDict('./',0)
