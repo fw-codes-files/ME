@@ -345,9 +345,10 @@ def testlistrm():
         ori.remove(11-a)
         print(ori,a,11-a)
 def evenly():
-    a = np.zeros((100,51))
-    b = a[3:100:2]
-    print(b.shape)
+    a = np.arange(20).reshape((-1,1))
+    for w in range(20-10+1):
+        row_rand = sorted(random.sample(range(w,20),10))
+        print(a[row_rand])
 if __name__ == '__main__':
     evenly()
     pass

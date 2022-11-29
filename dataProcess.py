@@ -656,7 +656,8 @@ class Dataprocess():
             else:
                 #  one video generates more shape[0] - ws samples
                 for w in range(ori_video.shape[0] - ws + 1):
-                    sample = ori_video[w:w + config['window_size']:2] # pick up evenly
+                    row_rand = sorted(random.sample(range(w, ori_video.shape[0]), config['window_size']))
+                    sample = ori_video[row_rand] # pick up randomly
                     data.append(sample)
                     target.append(label[f][0][0].astype(np.long))
                     if vote:
