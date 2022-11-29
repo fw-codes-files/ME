@@ -51,9 +51,9 @@ FAN_evey_fold_checkpoint:
 PCA_dim: 64
 PCA_dir: './weights/pca.m'
 # data sample strategy config
-Least_frame: 15
+Least_frame: 20
 Max_frame: 40
-window_size: 25
+window_size: 10
 Sample_frequency: 1
 Shuffle: True
 # LSTM config
@@ -99,5 +99,5 @@ checkpoint_pth: './'
 # data Post process config
 vote: False
 # log information config
-LOG_CHECK: '!!!ViT: 3dlms, [1,5,9] fold, MLP[cls], 8 head, learnable PE, gelu, 2000 epoch, 6 block, 2048 forward dim, 2048 input embedding, 25 ws, 8 bs, masked, shuffle True !!!'
+LOG_CHECK: '!!!ViT: 3dlms, [1,5,9] fold, MLP[cls], 8 head, learnable PE, gelu, 2000 epoch, 6 block, 2048 forward dim, 2048 input embedding, 10 ws, 8 bs, masked, shuffle True, pick up evenly !!!'
 LOG_pth: 'train.log'

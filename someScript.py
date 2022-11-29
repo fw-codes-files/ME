@@ -344,6 +344,10 @@ def testlistrm():
         ori.remove(a)
         ori.remove(11-a)
         print(ori,a,11-a)
+def evenly():
+    a = np.zeros((100,51))
+    b = a[3:100:2]
+    print(b.shape)
 if __name__ == '__main__':
-    testlistrm()
+    evenly()
     pass

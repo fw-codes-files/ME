@@ -406,18 +406,6 @@ class Dataprocess():
         pass
 
     @classmethod
-    def datasetProcess(cls, path):
-        emotion = os.listdir(path)
-        for e in emotion:
-            video_path = os.path.join(path, e)
-            videos = os.listdir(video_path)
-            for v in videos:
-                p = os.path.join(video_path, v)
-                cap = cv2.VideoCapture(p)
-                frame = cap.read()
-                print(frame[1].shape)
-
-    @classmethod
     def deleleDS_Store(cls):
         '''
         delete CK+ dataset folder contains .DS_Store files which are useless
@@ -497,15 +485,15 @@ class Dataprocess():
         # print(len(test_lst),len(train_lst))
         # 根据插值或者采样的结果 得到深度特征,3dlms,label
         t = Models(False, test_fold)
-        sPC = Utils.standardPC(t)
+        sPC = Utils.standardPC(t) # standard PointCloud
         random_idx = random.sample([i for i in range(config['PC_points_sample_range'])], config['PC_points_piars'])
         alphi_lst = []
         fi_lst = []
 
         for pth, label_, fms_number in tqdm.tqdm(train_lst):
             fi, alphi, ver_lst, np_label, pc = Utils.deep_features(pth, label_, t, 'fan')
-            fi_lst.append(fi)
-            alphi_lst.append(alphi)
+            fi_lst.append(fi) # deep feature
+            alphi_lst.append(alphi) # alpha i
             standard_idx = sPC[random_idx]
             standard_distance = np.linalg.norm(
                 standard_idx[:int(config['PC_points_piars'] / 2)] - standard_idx[int(config['PC_points_piars'] / 2):],
@@ -514,7 +502,7 @@ class Dataprocess():
             vari_distance = np.linalg.norm(
                 vari_idx[:int(config['PC_points_piars'] / 2)] - vari_idx[int(config['PC_points_piars'] / 2):], axis=1)
             rates = standard_distance / vari_distance
-            rate = np.median(rates)
+            rate = np.median(rates) # scale value between new pc and standard pc
             ver_lst[0] *= rate
             pc *= rate
             r, Tt = Utils.solveICPBySVD(p0=sPC, p1=pc)
@@ -623,7 +611,7 @@ class Dataprocess():
         return np.array(pca_lst, dtype=object)
 
     @classmethod
-    def dataAlign2WindowSize(cls, ws, feature, lms3d, label, use_AE: bool = False, vote:bool=False):
+    def dataAlign2WindowSize(cls, ws, feature, lms3d, label, use_AE: bool = False, vote:bool=False, step = 1):
         '''
             args:
                 ws: window size, also known as sequence length
@@ -668,7 +656,7 @@ class Dataprocess():
             else:
                 #  one video generates more shape[0] - ws samples
                 for w in range(ori_video.shape[0] - ws + 1):
-                    sample = ori_video[w:w + config['window_size']]
+                    sample = ori_video[w:w + config['window_size']:2] # pick up evenly
                     data.append(sample)
                     target.append(label[f][0][0].astype(np.long))
                     if vote:
@@ -785,12 +773,10 @@ class Dataprocess():
         else:
             return label_test, test, lms3d_test, split_test
 if __name__ == '__main__':
-    # 高清视频社区的素材
-    # Dataprocess.datasetProcess('E:/lstm_data4train')
     # 删除所有.DS_Store文件
     # Dataprocess.deleleDS_Store()
     # CK+数据加载
-    # Dataprocess.loadCKPlusData(1)
+    Dataprocess.loadCKPlusData(1)
     # for i in range(1, 11):
     #     print(i)
     #     Dataprocess.loadCKPlusData(i)

@@ -617,7 +617,7 @@ class Transformer_traintest():
                                'proj_dim': config["T_proj_dim"],
                                'forward_dim': config["T_forward_dim"],
                                'state_dict': trans.state_dict()}
-                # torch.save(checkpoints, f'./{config["test_fold"]}test_{11 - config["test_fold"]}val_{time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())}.pkl')
+                torch.save(checkpoints, f'./{config["test_fold"]}test_{11 - config["test_fold"]}val_{time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())}.pkl')
             logging.info(f'------------------------------------train ends, train folds:1,2,3,4,7,8,9,10-----------------------------------------------')
         send('2070 train result', f'{config["LOG_CHECK"]}')
 
@@ -684,6 +684,7 @@ class Transformer_traintest():
             logging.info(
                 f'------------------------------------train ends, train folds:1,2,3,4,7,8,9,10-----------------------------------------------')
         send('2070 train result', f'{config["LOG_CHECK"]}')
+
 class AutoEncoder():
     def __init__(self):
         pass
