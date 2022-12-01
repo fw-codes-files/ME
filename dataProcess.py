@@ -673,6 +673,72 @@ class Dataprocess():
         dataloader = torch.utils.data.DataLoader(dataset, shuffle=config['Shuffle'], batch_size=config['batch_size'])
 
         return dataloader
+    @classmethod
+    def ConvertVideo2Samples(cls, ws, feature, lms3d, label, vote:bool = True):
+        '''
+            args:
+                ws: window size, also known as sequence length
+                feature: deep feature from imgages
+                lms3d: 3D landmarks
+                label: target data
+            return:
+                dataloader
+        '''
+        data = []
+        target = []
+        samples_counter_lst = []
+        for f in range(0, feature.shape[0]):  # video level
+            # f_mean = np.mean(feature[f][:,:512], axis=1)
+            # f_std = np.std(feature[f][:,:512], axis=1)
+            # feature[f][:,:512] = (feature[f][:,:512] - f_mean.reshape(-1, 1)) / f_std.reshape(-1, 1)
+
+            # l_mean = np.mean(lms3d[f], axis=1)
+            # l_std = np.std(lms3d[f], axis=1)
+            # lms3d[f] = (lms3d[f] - l_mean.reshape(-1, 1)) / l_std.reshape(-1, 1)
+
+            # concatnate and align to ws -- video level
+            # ori_video = np.hstack((feature[f][:,:512], lms3d[f]))
+            ori_video = lms3d[f]
+            if ori_video.shape[0] < ws:
+                # EOS
+                EOS_num = ws - ori_video.shape[0]
+                blanks = np.tile(EOS, (EOS_num, 1))
+                video = np.concatenate((ori_video, blanks), axis=0)
+                data.append(video)
+                target.append(label[f][0][0])
+                if vote:
+                    samples_counter_lst.append(f)
+            else:
+                # one video can generate any number samples
+                v_fs = np.arange(ori_video.shape[0])
+                v_ix = np.zeros((v_fs.shape[0],))
+                v_fs_shuffle = v_fs.copy()
+                redundancy_matrix = np.zeros((config['standBy'], config['window_size'])) # (samples number, samples from frame index)
+                for i in range(config['standBy']):
+                    np.random.shuffle(v_fs_shuffle)
+                    v_ix_copy = v_ix.copy()
+                    v_ix_copy[v_fs_shuffle[:config['window_size']]] = 1
+                    redundancy_matrix[i] = v_fs[v_ix_copy.astype(int).astype(bool)]
+                span = (redundancy_matrix.max(axis=1) - redundancy_matrix.min(axis=1))>= ori_video.shape[0]//3*2
+                if len(span)>=config['selected']:
+                    samples = redundancy_matrix[span,:][:config['selected']]
+                else:
+                    samples = redundancy_matrix[span, :]
+                for w in range(samples.shape[0]):
+                    data.append(ori_video[list(samples[w].astype(int))])
+                    target.append(label[f][0][0].astype(np.long))
+                    if vote:
+                        samples_counter_lst.append(f)
+        # dataset and dataloader
+        if vote:
+            dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)).cuda(),
+                                  torch.from_numpy(np.array(data, dtype=np.float32)).cuda(),
+                                  torch.from_numpy(np.array(samples_counter_lst, dtype=np.float32)).cuda())
+        else:
+            dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)).cuda(),
+                                  torch.from_numpy(np.array(data, dtype=np.float32)).cuda())
+        dataloader = torch.utils.data.DataLoader(dataset, shuffle=config['Shuffle'], batch_size=config['batch_size'])
+        return dataloader
 
     @classmethod
     def AEinput(cls, path):

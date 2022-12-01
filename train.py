@@ -583,8 +583,8 @@ class Transformer_traintest():
             feature = np.concatenate((feature, train_feature_c))
             seqs = np.concatenate((seqs, train_seqs_c))
 
-        train_dataloader = Dataprocess.dataAlign2WindowSize(config['window_size'], feature, lms3d, label, False, False)
-
+        # train_dataloader = Dataprocess.dataAlign2WindowSize(config['window_size'], feature, lms3d, label, False, False)
+        train_dataloader = Dataprocess.ConvertVideo2Samples(config['window_size'], feature, lms3d, label, False)
         writer_loss = SummaryWriter(f'./tb/loss/train/')
         writer_acc_train = SummaryWriter(f'./tb/acc/train/')
         for e in range(epoch):
@@ -592,6 +592,7 @@ class Transformer_traintest():
             score, total = 0, 0
             for input, target in train_dataloader:
                 optimizer.zero_grad()
+                print(input.shape)
                 pred = trans(input, config['T_masked'])
                 loss = loss_func(pred, target.long())
                 loss.backward()

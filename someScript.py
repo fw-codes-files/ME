@@ -345,10 +345,25 @@ def testlistrm():
         ori.remove(11-a)
         print(ori,a,11-a)
 def evenly():
-    a = np.arange(20).reshape((-1,1))
-    for w in range(20-10+1):
-        row_rand = sorted(random.sample(range(w,20),10))
-        print(a[row_rand])
+    video = np.arange(42)
+    video_index = np.zeros((video.shape[0],))
+    video_shuffle = video.copy()
+    np.random.shuffle(video_shuffle)
+    print(video_shuffle)
+    np.random.shuffle(video_shuffle)
+    print(video_shuffle)
+    sample_index = video_shuffle[:10]
+    print(sample_index)
+    video_index[sample_index] = 1
+    print(video[video_index.astype(int).astype(bool)])
+    one_sample = video[video_index.astype(int).astype(bool)]
+def combination():
+    import math
+    print(math.factorial(20)//(math.factorial(10)*math.factorial(10)))
+    print(math.factorial(4))
+def axismax():
+    a = np.arange(16).reshape((4,4))
+    print(a.max(axis=1))
 if __name__ == '__main__':
-    evenly()
+    axismax()
     pass

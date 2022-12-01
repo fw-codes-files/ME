@@ -56,6 +56,8 @@ Max_frame: 40
 window_size: 10
 Sample_frequency: 1
 Shuffle: True
+standBy: 100
+selected: 20
 # LSTM config
 LSTM_input_dim: 204
 LSTM_hidden_dim: 512
