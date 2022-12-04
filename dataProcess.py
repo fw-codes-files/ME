@@ -387,7 +387,7 @@ class Utils():
         label = torch.cat(label)
         max_index = torch.max(group_notes)
 
-        for m in range(int(max_index.item())):
+        for m in range(int(max_index.item()+1)):
             m_m = group_notes==m
             pred_collection_m = pred_collection[m_m] # (sample number, 7)
             label_m = label[m_m] # pick data by video index

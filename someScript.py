@@ -388,5 +388,6 @@ def countsamplemaxnumber():
         print(a.max(),b.max())
 
 if __name__ == '__main__':
-    voteunitest()
+    for i in range(37):
+        print(i)
     pass
