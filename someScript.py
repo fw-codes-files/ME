@@ -184,7 +184,7 @@ def testsoftmax():
     c = torch.arange(20,dtype=torch.float32).reshape((4,5))
     b = torch.arange(20,dtype=torch.float32).reshape((5,4))
     d = torch.mm(a,b)
-    s = torch.nn.Softmax(dim=0)
+    s = torch.nn.Softmax(dim=1)
     e = s(d)
     print(e)
     print(torch.mm(e,c))
@@ -327,9 +327,9 @@ def voteunitest():
     print(a[0])
     print(a[1])
     print(a[2])
-    b = [0,0,0,1,2,2]
-    c = [3,1,2]
-    Utils.vote(a,c,b)
+    b = [torch.tensor((0,)),torch.tensor((0,)),torch.tensor((0,)),torch.tensor((1,)),torch.tensor((2,)),torch.tensor((2,))]
+    c = [torch.tensor((0,)),torch.tensor((1,)),torch.tensor((2,))]
+    Utils.vote(a,b,c)
 def testtesnor():
     a = torch.tensor([True,False,True,False,True])
     print(a.device)
@@ -364,6 +364,29 @@ def combination():
 def axismax():
     a = np.arange(16).reshape((4,4))
     print(a.max(axis=1))
+def drawHist():
+    import matplotlib.pyplot as plt
+    from pylab import mpl
+    mpl.rcParams['font.sans-serif'] = ['SimHei']  # 添加这条可以让图形显示中文
+    me_f = np.loadtxt('./dataset/fan_feature_fold1_test.txt')
+    q_f = np.loadtxt('./dataset/feature1.txt')
+    x_axis_data = [i for i in range(10)]
+    # plot中参数的含义分别是横轴值，纵轴值，线的形状，颜色，透明度,线的宽度和标签
+    plt.plot(x_axis_data, me_f[0][:10], 'ro-', color='r', alpha=0.8, linewidth=1, label='一些数字')
+    plt.plot(x_axis_data, q_f[0][:10], 'ro-', color='g', alpha=0.8, linewidth=1, label='一些数字')
+    # 显示标签，如果不加这句，即使在plot中加了label='一些数字'的参数，最终还是不会显示标签
+    plt.legend(loc="upper right")
+    plt.xlabel('x轴数字')
+    plt.ylabel('y轴数字')
+    plt.show()
+    return
+def countsamplemaxnumber():
+    mamm = 0
+    for i in range(1,11):
+        a = np.loadtxt(f'./dataset/split_{i}_test.txt')
+        b = np.loadtxt(f'./dataset/split_{i}_train.txt')
+        print(a.max(),b.max())
+
 if __name__ == '__main__':
-    axismax()
+    voteunitest()
     pass

@@ -17,7 +17,7 @@ import joblib
 #global variables#
 ##################
 target = np.array([[16, 12], [31, 12]])  # eye position in 2d image, for now, fer2013 dataset which image size is 48*48
-target_fan = np.array([[75, 56], [150, 56]])  # like previous line , just image size is 224*224
+target_fan = np.array([[75, 68], [150, 68]])  # like previous line , just image size is 224*224
 config = yaml.safe_load(open('./config.yaml'))
 EOS = np.zeros((1, config['T_input_dim']))  # padding of origin 3d lms data sequence
 AE_EOS = np.zeros((1, config['AE_mid_dim']))  # padding of AE mid feature sequence
@@ -136,8 +136,11 @@ class Utils():
         img = img.reshape(1, img.shape[0], img.shape[1], 3)
         with torch.no_grad():
             boxes = t.face_boxes(img)  # (bs, faces)
-            param_lst, roi_box_lst, boxed_imgs, deltaxty_lst = t.tddfa(img,
-                                                                       boxes)  # param_lst(faces(62 = 12 + 40 +10))  roi_box_lst(bs,faces) boxed_imgs(faces) deltaxty_lst(bs, faces)
+            print(pth,boxes)
+            param_lst, roi_box_lst, boxed_imgs, deltaxty_lst = t.tddfa(img,boxes)  # param_lst(faces(62 = 12 + 40 +10))  roi_box_lst(bs,faces) boxed_imgs(faces) deltaxty_lst(bs, faces)
+            print(boxed_imgs[0].shape)
+            cv2.imshow('box_img',boxed_imgs[0])
+            cv2.waitKey(0)
             ver_dense, ver_lst = t.tddfa.recon_vers(param_lst, list(chain(*roi_box_lst)),
                                                     dense_flag=config['3DDFA_dense'])  # ver_dense(faces) ver_lst(faces)
             if not type(ver_lst) in [tuple, list]:
@@ -164,10 +167,27 @@ class Utils():
                                                                                  -1)  # 替代源码transforms.Normalize(mean=0,std=255)的效果,features = (bs,特征数)
                     np_f = feature.cpu().numpy()
                 else:
+                    aligned_boxed_img = aligned_boxed_img[:, :, ::-1].copy()
                     aligned_boxed_img = np.swapaxes(aligned_boxed_img, 0, 2)
                     aligned_boxed_img = np.swapaxes(aligned_boxed_img, 1, 2)
-                    f, alpha = t.FAN(torch.from_numpy(aligned_boxed_img).unsqueeze(0).float().cuda() / 255,
-                                     phrase='eval')  # 改用拼接特征
+                    f, alpha = t.FAN(torch.from_numpy(aligned_boxed_img).unsqueeze(0).float().cuda() / 255, phrase='eval')  # 改用拼接特征
+                    me = f.detach().cpu().numpy()
+                    import matplotlib.pyplot as plt
+                    from pylab import mpl
+                    mpl.rcParams['font.sans-serif'] = ['SimHei']  # 添加这条可以让图形显示中文
+                    x_axis_data = [i for i in range(512)]
+                    # plot中参数的含义分别是横轴值，纵轴值，线的形状，颜色，透明度,线的宽度和标签
+                    qy = np.loadtxt('F:/conda/envs/ak/emotion_FAN/em.txt')
+                    plt.plot(x_axis_data, me.reshape((512,)), 'ro-', color='r', alpha=0.8, linewidth=1, label='整合')
+                    # plt.plot(x_axis_data, qy.reshape((512,)), 'ro-', color='g', alpha=0.8, linewidth=1, label='乔羽')
+
+                    # 显示标签，如果不加这句，即使在plot中加了label='一些数字'的参数，最终还是不会显示标签
+                    plt.legend(loc="upper right")
+                    plt.xlabel('x轴数字')
+                    plt.ylabel('y轴数字')
+
+                    plt.show()
+                    return
                     # np_f = f.cpu().numpy()
                 np_label = np.array([label_])
                 cs = torch.empty(0)
@@ -184,7 +204,7 @@ class Utils():
                 # pcd = o3d.geometry.PointCloud()
                 # pcd.points = o3d.utility.Vector3dVector(np.vstack((pc,ver_lst[ibn].T)))
                 # o3d.visualization.draw_geometries([pcd])
-            return f, alpha, ver_lst, np_label, pc
+            # return f, alpha, ver_lst, np_label, pc
 
     @classmethod
     def loadAllCKPlus(cls, pth, t):
@@ -292,11 +312,11 @@ class Utils():
         v_idx = 0
         for idx, sptr in enumerate(spllit_lst):
             with open(f'./dataset/fan_feature_fold{test_fold}_{t}.txt', 'ab') as nf:
-                video_sized_copy_feature = torch.tile(video_f_lst[idx], (sptr, 1))
-                concatnated_f = torch.cat((fi_lst[v_idx:v_idx + sptr], video_sized_copy_feature), dim=1)
-                np_f = concatnated_f.cpu().numpy()
+                # video_sized_copy_feature = torch.tile(video_f_lst[idx], (sptr, 1))
+                # concatnated_f = torch.cat((fi_lst[v_idx:v_idx + sptr], video_sized_copy_feature), dim=1)
+                # np_f = concatnated_f.cpu().numpy()
                 # np.savetxt(nf, np_f)
-
+                pass
     @classmethod
     def open3dVerify(cls, ver_lst, pc, sPC):
         import open3d as o3d
@@ -363,22 +383,22 @@ class Utils():
         '''
         acc = 0
         pred_collection = torch.cat(pred_collection) # tensor (samples,7)
-        label = torch.cat(label)
         group_notes = torch.cat(group_notes)
+        label = torch.cat(label)
         max_index = torch.max(group_notes)
 
         for m in range(int(max_index.item())):
             m_m = group_notes==m
             pred_collection_m = pred_collection[m_m] # (sample number, 7)
             label_m = label[m_m] # pick data by video index
-            pred_cls = torch.topk(pred_collection_m, 1, dim=1)[1]
+            pred_cls = torch.topk(pred_collection_m, 1, dim=1)[1] # index of classification prediction
             table = torch.zeros((1,7)).cuda()
             for pc in pred_cls:
                 table[0,pc]+=1
             most_pre = torch.topk(table, 1, dim=1)[0]
-            a = table == most_pre
+            a = table == most_pre # check whether prediction is sole
             pre_conf, final_pre = None, None
-            if torch.sum(a.float()) > 1:
+            if torch.sum(a.float()) > 1: # if prediction is not sole
                 indx = torch.nonzero(a).cuda()
                 for i in indx:
                     vec = torch.zeros((1, 7)).cuda()
@@ -394,7 +414,7 @@ class Utils():
                             final_pre = i[1]
                         else:
                             pass
-            else:
+            else: # if prediction is sole
                 final_pre = torch.topk(table, 1, dim=1)[1]
             final_pre_c = final_pre.cuda()
             if final_pre_c == label_m[0]:
@@ -640,7 +660,7 @@ class Dataprocess():
 
             # concatnate and align to ws -- video level
             # ori_video = np.hstack((feature[f][:,:512], lms3d[f]))
-            ori_video = lms3d[f]
+            ori_video = feature[f][:,:512]
             if ori_video.shape[0] < ws:
                 # EOS
                 EOS_num = ws - ori_video.shape[0]
@@ -673,6 +693,7 @@ class Dataprocess():
         dataloader = torch.utils.data.DataLoader(dataset, shuffle=config['Shuffle'], batch_size=config['batch_size'])
 
         return dataloader
+
     @classmethod
     def ConvertVideo2Samples(cls, ws, feature, lms3d, label, vote:bool = True):
         '''
@@ -710,19 +731,19 @@ class Dataprocess():
                     samples_counter_lst.append(f)
             else:
                 # one video can generate any number samples
-                v_fs = np.arange(ori_video.shape[0])
-                v_ix = np.zeros((v_fs.shape[0],))
-                v_fs_shuffle = v_fs.copy()
-                redundancy_matrix = np.zeros((config['standBy'], config['window_size'])) # (samples number, samples from frame index)
+                v_fs = np.arange(ori_video.shape[0]) # how many frames a video contains (frames,)
+                v_ix = np.zeros((v_fs.shape[0],)) # what frames will be sampled (frames,)
+                v_fs_shuffle = v_fs.copy() # a cpoy for shuffle
+                redundancy_matrix = np.zeros((config['standBy'], config['window_size'])) # a matrix stand for redundancy and sequence length, (how many standby samples, sequence length)
                 for i in range(config['standBy']):
-                    np.random.shuffle(v_fs_shuffle)
-                    v_ix_copy = v_ix.copy()
-                    v_ix_copy[v_fs_shuffle[:config['window_size']]] = 1
-                    redundancy_matrix[i] = v_fs[v_ix_copy.astype(int).astype(bool)]
-                span = (redundancy_matrix.max(axis=1) - redundancy_matrix.min(axis=1))>= ori_video.shape[0]//3*2
-                if len(span)>=config['selected']:
+                    np.random.shuffle(v_fs_shuffle) # every standby sample will be generated from origin video shuffled again (frames,)
+                    v_ix_copy = v_ix.copy() # index copy
+                    v_ix_copy[v_fs_shuffle[:config['window_size']]] = 1 # code in inner bracket means a slicing operation on variable v_fs_shuffle, code in outer bracket means a mask operation.
+                    redundancy_matrix[i] = v_fs[v_ix_copy.astype(int).astype(bool)] # assignment
+                span = (redundancy_matrix.max(axis=1) - redundancy_matrix.min(axis=1))>= ori_video.shape[0]//3*2 # calulate the span of every standby sample, greater than some value will be selected as input sequence
+                if len(span)>=config['selected']: # number of qualified sample might be greater than we want, so if true, just select top 20 samples.
                     samples = redundancy_matrix[span,:][:config['selected']]
-                else:
+                else: # if not, take as many as possible
                     samples = redundancy_matrix[span, :]
                 for w in range(samples.shape[0]):
                     data.append(ori_video[list(samples[w].astype(int))])
@@ -838,12 +859,109 @@ class Dataprocess():
 
             return test_l, test_feature, test_lms3d, test_seqs
         else:
+
             return label_test, test, lms3d_test, split_test
+
+    @classmethod
+    def saveFacePicture(cls):
+        import tqdm
+        import os
+        t = Models(False)
+        root = 'E:/cohn-kanade-images/'
+        serial = os.listdir(root)[1:]
+        if os.path.isdir(f'{root}cut'):
+            pass
+        else:
+            os.mkdir(f'{root}cut')
+        for s in serial:
+            parts_pth = os.path.join(root,s)
+            parts = os.listdir(parts_pth)
+            if os.path.isdir(f'{root}cut/{s}'):
+                pass
+            else:
+                os.mkdir(f'{root}cut/{s}')
+            for p in parts:
+                if os.path.isdir(f'{root}cut/{s}/{p}'):
+                    pass
+                else:
+                    os.mkdir(f'{root}cut/{s}/{p}')
+                imgs_pth = os.path.join(parts_pth,p)
+                imgs = os.listdir(imgs_pth)
+                for i in imgs:
+                    img_pth = os.path.join(imgs_pth, i)
+                    img = cv2.imread(img_pth)
+                    img = img.reshape(1, img.shape[0], img.shape[1], 3)
+                    with torch.no_grad():
+                        boxes = t.face_boxes(img)  # (bs, faces)
+                        param_lst, roi_box_lst, boxed_imgs, deltaxty_lst = t.tddfa(img,
+                                                                                   boxes)  # param_lst(faces(62 = 12 + 40 +10))  roi_box_lst(bs,faces) boxed_imgs(faces) deltaxty_lst(bs, faces)
+                        ver_dense, ver_lst = t.tddfa.recon_vers(param_lst, list(chain(*roi_box_lst)),
+                                                                dense_flag=config[
+                                                                    '3DDFA_dense'])  # ver_dense(faces) ver_lst(faces)
+                        if not type(ver_lst) in [tuple, list]:
+                            ver_lst = [ver_lst]
+                        img_bs_num = len(roi_box_lst)
+                        pass_num = 0
+                        for ibn in range(img_bs_num):
+                            crop_lms = []
+                            face_num_per_img = len(roi_box_lst[ibn])  # 一个img有多少张脸
+                            ver_lst_fragment = ver_lst[pass_num:pass_num + face_num_per_img].copy()  # 第x张脸
+                            crop_lms.append([ver_lst_fragment[0][0] - roi_box_lst[ibn][0][0] - deltaxty_lst[ibn][0][0],
+                                             ver_lst_fragment[0][1] - roi_box_lst[ibn][0][1] - deltaxty_lst[ibn][0][1]])
+                            eye_centers = Utils.getEyesAverage(crop_lms[0])  # 得到的是散装序列，若是按img，face 划分需要用face_num_per_img变量进行划分
+                            aligned_boxed_img = Utils.face_align(boxed_imgs[0], eye_centers)  # 和上一行的对应起来，都只取了第一张人脸
+                            cv2.imwrite(f'{root}cut/{s}/{p}/{i}',aligned_boxed_img)
+
+    @classmethod
+    def baseline(cls, ws, feature, lms3d, label, vote:bool=False):
+        '''
+            args:
+                ws: window size, also known as sequence length
+                feature: deep feature from imgages
+                lms3d: 3D landmarks
+                label: target data
+            return:
+                dataloader
+        '''
+        data = []
+        target = []
+        samples_counter_lst = []
+        for f in range(0, feature.shape[0]):  # video level
+            # f_mean = np.mean(feature[f][:,:512], axis=1)
+            # f_std = np.std(feature[f][:,:512], axis=1)
+            # feature[f][:,:512] = (feature[f][:,:512] - f_mean.reshape(-1, 1)) / f_std.reshape(-1, 1)
+
+            # l_mean = np.mean(lms3d[f], axis=1)
+            # l_std = np.std(lms3d[f], axis=1)
+            # lms3d[f] = (lms3d[f] - l_mean.reshape(-1, 1)) / l_std.reshape(-1, 1)
+
+            # concatnate and align to ws -- video level
+            # ori_video = np.hstack((feature[f][:,:512], lms3d[f]))
+            ori_video = lms3d[f]
+            if ori_video.shape[0] < ws:
+                # EOS
+                EOS_num = ws - ori_video.shape[0]
+                blanks = np.tile(EOS, (EOS_num, 1))
+                video = np.concatenate((ori_video, blanks), axis=0)
+            data.append(video)
+            target.append(label[f][0][0])
+            if vote:
+                samples_counter_lst.append(f)
+        # dataset and dataloader
+        if vote:
+            dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)).cuda(),
+                                  torch.from_numpy(np.array(data, dtype=np.float32)).cuda(),
+                                  torch.from_numpy(np.array(samples_counter_lst, dtype=np.float32)).cuda())
+        else:
+            dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)).cuda(),
+                                  torch.from_numpy(np.array(data, dtype=np.float32)).cuda())
+        dataloader = torch.utils.data.DataLoader(dataset, shuffle=config['Shuffle'], batch_size=config['batch_size'])
+        return dataloader
 if __name__ == '__main__':
     # 删除所有.DS_Store文件
     # Dataprocess.deleleDS_Store()
     # CK+数据加载
-    Dataprocess.loadCKPlusData(1)
+    # Dataprocess.loadCKPlusData(1)
     # for i in range(1, 11):
     #     print(i)
     #     Dataprocess.loadCKPlusData(i)
@@ -881,4 +999,6 @@ if __name__ == '__main__':
     #     vis.add_geometry(pcd)
     #     vis.poll_events()
     #     vis.update_renderer()
+    # save face images
+    # Dataprocess.saveFacePicture()
     pass

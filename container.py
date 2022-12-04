@@ -29,14 +29,16 @@ class Models(object):
         self.Res_model.load_state_dict(self.Res_chechpoint['model_state_dict'])
         self.Res_model.cuda()
         self.FAN = resnet18_at(at_type=config['FAN_type'])
-        self.FAN.eval()
-        pretrained_state_dict = torch.load(config['FAN_evey_fold_checkpoint'][fold])['state_dict']
+        pretrained_state_dict = torch.load(config['FAN_checkpoint'])['state_dict'] # checkpoint['state_dict']
+        model_state_dict = self.FAN.state_dict()
         for key in pretrained_state_dict:
             if ((key == 'module.fc.weight') | (key == 'module.fc.bias')):
                 pass
             else:
-                self.FAN.state_dict()[key.replace('module.', '')] = pretrained_state_dict[key]
+                model_state_dict[key.replace('module.', '')] = pretrained_state_dict[key]
+        self.FAN.load_state_dict(model_state_dict)
         self.FAN.cuda()
+        self.FAN.eval()
         self.LSTM_model = LSTMModel(inputDim=config['LSTM_input_dim'], hiddenNum=config['LSTM_hidden_dim'],
                                     outputDim=config['LSTM_output_dim'], layerNum=config['LSTM_layerNum'],
                                     cell=config['LSTM_cell'], use_cuda=config['use_cuda'])
