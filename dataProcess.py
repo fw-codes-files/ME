@@ -317,6 +317,7 @@ class Utils():
                 # np_f = concatnated_f.cpu().numpy()
                 # np.savetxt(nf, np_f)
                 pass
+
     @classmethod
     def open3dVerify(cls, ver_lst, pc, sPC):
         import open3d as o3d
@@ -733,10 +734,13 @@ class Dataprocess():
                 # one video can generate any number samples
                 v_fs = np.arange(ori_video.shape[0]) # how many frames a video contains (frames,)
                 v_ix = np.zeros((v_fs.shape[0],)) # what frames will be sampled (frames,)
-                v_fs_shuffle = v_fs.copy() # a cpoy for shuffle
                 redundancy_matrix = np.zeros((config['standBy'], config['window_size'])) # a matrix stand for redundancy and sequence length, (how many standby samples, sequence length)
                 for i in range(config['standBy']):
-                    np.random.shuffle(v_fs_shuffle) # every standby sample will be generated from origin video shuffled again (frames,)
+                    v_fs_shuffle = v_fs.copy()  # a cpoy for shuffle
+                    iind = random.sample([xx for xx in range(ori_video.shape[0]//2)],1)
+                    temp = v_fs_shuffle[iind[0]:].copy()
+                    np.random.shuffle(temp) # every standby sample will be generated from origin video shuffled again (frames,)
+                    v_fs_shuffle[iind[0]:] = temp.copy()
                     v_ix_copy = v_ix.copy() # index copy
                     v_ix_copy[v_fs_shuffle[:config['window_size']]] = 1 # code in inner bracket means a slicing operation on variable v_fs_shuffle, code in outer bracket means a mask operation.
                     redundancy_matrix[i] = v_fs[v_ix_copy.astype(int).astype(bool)] # assignment
@@ -847,16 +851,31 @@ class Dataprocess():
 
     @classmethod
     def loadSingleFold(cls, fold, crop):
+        # import open3d as o3d
+        # pcd = o3d.geometry.PointCloud()
+        # vis = o3d.visualization.Visualizer()
+        # vis.create_window()
+        # opt = vis.get_render_option()
+        # opt.background_color = np.asarray([0, 0, 0])
+        # opt.point_size = 5
+        # opt.show_coordinate_frame = True
         label_test = np.loadtxt(f'./dataset/label_fold{fold}_test.txt').reshape(-1, 1)
-        test = np.loadtxt(f'./dataset/fan_feature_fold{fold}_test.txt')
+        test = np.loadtxt(f'./dataset/feature{fold}.txt')
         lms3d_test = np.loadtxt(f'./dataset/3dlms_fold{fold}_test.txt')
         split_test = np.loadtxt(f'./dataset/split_{fold}_test.txt')
         if crop:
-
             test_seqs, test_l = Utils.insertOrSample(split_test.astype(np.int_), label_test.astype(np.float32))
             _, test_feature = Utils.insertOrSample(split_test.astype(np.int_), test.astype(np.float32))
             _, test_lms3d = Utils.insertOrSample(split_test.astype(np.int_), lms3d_test.astype(np.float32).reshape(-1, 204))
-
+            # 解锁注释查看point clouds
+            # for i in range(test_lms3d.shape[0]):
+            #     for s in range(test_lms3d[i].shape[0]):
+            #         pc = test_lms3d[i][s].reshape((-1,3))
+            #         pcd.points = o3d.utility.Vector3dVector(pc)
+            #         pcd.transform([[1,0,0,0],[0,-1,0,0],[0,0,1,0],[0,0,0,1]])
+            #         vis.add_geometry(pcd)
+            #         vis.poll_events()
+            #         vis.update_renderer()
             return test_l, test_feature, test_lms3d, test_seqs
         else:
 
@@ -957,6 +976,101 @@ class Dataprocess():
                                   torch.from_numpy(np.array(data, dtype=np.float32)).cuda())
         dataloader = torch.utils.data.DataLoader(dataset, shuffle=config['Shuffle'], batch_size=config['batch_size'])
         return dataloader
+
+    @classmethod
+    def ConvertVideo2Samples100Votes(cls, ws, feature, lms3d, label, vote:bool = True):
+        '''
+            args:
+                ws: window size, also known as sequence length
+                feature: deep feature from imgages
+                lms3d: 3D landmarks
+                label: target data
+            return:
+                dataloader
+        '''
+        data = []
+        target = []
+        samples_counter_lst = []
+        for f in range(0, feature.shape[0]):  # video level
+            # f_mean = np.mean(feature[f][:,:512], axis=1)
+            # f_std = np.std(feature[f][:,:512], axis=1)
+            # feature[f][:,:512] = (feature[f][:,:512] - f_mean.reshape(-1, 1)) / f_std.reshape(-1, 1)
+
+            # l_mean = np.mean(lms3d[f], axis=1)
+            # l_std = np.std(lms3d[f], axis=1)
+            # lms3d[f] = (lms3d[f] - l_mean.reshape(-1, 1)) / l_std.reshape(-1, 1)
+
+            # concatnate and align to ws -- video level
+            # ori_video = np.hstack((feature[f][:,:512], lms3d[f]))
+            ori_video = lms3d[f]
+            if ori_video.shape[0] < ws:
+                # EOS
+                EOS_num = ws - ori_video.shape[0]
+                blanks = np.tile(EOS, (EOS_num, 1))
+                video = np.concatenate((ori_video, blanks), axis=0)
+                data.append(video)
+                target.append(label[f][0][0])
+                if vote:
+                    samples_counter_lst.append(f)
+            else:
+                # one video can generate any number samples
+                v_fs = np.arange(ori_video.shape[0]) # how many frames a video contains (frames,)
+                v_ix = np.zeros((v_fs.shape[0],)) # what frames will be sampled (frames,)
+                v_fs_shuffle = v_fs.copy() # a cpoy for shuffle
+                redundancy_matrix = np.zeros((config['standBy'], config['window_size'])) # a matrix stand for redundancy and sequence length, (how many standby samples, sequence length)
+                for i in range(config['standBy']):
+                    np.random.shuffle(v_fs_shuffle) # every standby sample will be generated from origin video shuffled again (frames,)
+                    v_ix_copy = v_ix.copy() # index copy
+                    v_ix_copy[v_fs_shuffle[:config['window_size']]] = 1 # code in inner bracket means a slicing operation on variable v_fs_shuffle, code in outer bracket means a mask operation.
+                    redundancy_matrix[i] = v_fs[v_ix_copy.astype(int).astype(bool)] # assignment
+                span = (redundancy_matrix.max(axis=1) - redundancy_matrix.min(axis=1))>= ori_video.shape[0]//3*2 # calulate the span of every standby sample, greater than some value will be selected as input sequence
+                if len(span)>=config['selected']: # number of qualified sample might be greater than we want, so if true, just select top 20 samples.
+                    samples = redundancy_matrix[span,:][:config['selected']]
+                else: # if not, take as many as possible
+                    samples = redundancy_matrix[span, :]
+                for w in range(samples.shape[0]):
+                    data.append(ori_video[list(samples[w].astype(int))])
+                    target.append(label[f][0][0].astype(np.long))
+                    if vote:
+                        samples_counter_lst.append(f)
+        # dataset and dataloader
+        if vote:
+            dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)),
+                                  torch.from_numpy(np.array(data, dtype=np.float32)),
+                                  torch.from_numpy(np.array(samples_counter_lst, dtype=np.float32)))
+        else:
+            dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)),
+                                  torch.from_numpy(np.array(data, dtype=np.float32)))
+        return dataset
+
+    @classmethod
+    def rgbPatchFea(cls):
+        import dlib
+        import cv2
+        import numpy as np
+        # dlib detection
+        detector = dlib.get_frontal_face_detector()
+        sp = dlib.shape_predictor('F:/conda/envs/ak/micro-expressions/shape_predictor_68_face_landmarks.dat')
+        image = cv2.imread('F:/conda/envs/ak/emotion_FAN/data/face/ck_face/S005/001/S005_001_00000011.png')
+        image_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        faces = detector(image_gray)
+        landmarks = sp(image_gray,faces[0])
+        mask = np.zeros((224,224))
+        for n in range(68):
+            x = landmarks.part(n).x
+            y = landmarks.part(n).y
+            # mask[max(0,int(y)-3):min(223,int(y)+3),max(0,int(x)+3):min(223,int(x)+3)] = 1
+            mask[int(y)-4:int(y)+5,int(x)-4:int(x)+5] = 1
+            # patch = image[int(y)-10:int(y)+10,int(x)-10:int(x)+10]
+            # cv2.imshow('pa',patch)
+            # cv2.waitKey(0)
+            # cv2.circle(image,(int(x),int(y)),2,[0,255,0])
+        image = image*mask.reshape((224,224,1))
+        cv2.imshow('img',image/255)
+        cv2.waitKey(0)
+        # dlib bounding box
+        # dlib landmarks
+        # dlib landmarks patch
 if __name__ == '__main__':
     # 删除所有.DS_Store文件
     # Dataprocess.deleleDS_Store()
@@ -1001,4 +1115,6 @@ if __name__ == '__main__':
     #     vis.update_renderer()
     # save face images
     # Dataprocess.saveFacePicture()
+    # 68 lms2d
+    Dataprocess.rgbPatchFea()
     pass

@@ -459,8 +459,7 @@ class ViLT(nn.Module):
         x_rgb, x_lms = torch.split(x, 512, dim=2)
         lms_emb = self.lms_type_project_layer(x_lms)
         rgb_emb = self.rgb_type_project_layer(x_rgb)
-        input_emb = torch.cat((torch.tile(self.cls_token, dims=(x.shape[0], 1, 1)), lms_emb,
-                               torch.tile(self.second_token, dims=(x.shape[0], 1, 1)), rgb_emb), dim=1)
+        input_emb = torch.cat((torch.tile(self.cls_token, dims=(x.shape[0], 1, 1)), lms_emb, torch.tile(self.second_token, dims=(x.shape[0], 1, 1)), rgb_emb), dim=1)
         input_emb += torch.cat((self.lms_pos_emb, self.rgb_pos_emb), dim=1)
         output_emb = self.encoder(input_emb)
         pred = self.MLP(output_emb[:, 0, :])

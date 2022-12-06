@@ -386,8 +386,9 @@ def countsamplemaxnumber():
         a = np.loadtxt(f'./dataset/split_{i}_test.txt')
         b = np.loadtxt(f'./dataset/split_{i}_train.txt')
         print(a.max(),b.max())
-
+def sample():
+    sam_idx = sorted(random.sample([S for S in range(71)], 71))
+    print(sam_idx == [S for S in range(71)])
 if __name__ == '__main__':
-    for i in range(37):
-        print(i)
+    sample()
     pass
