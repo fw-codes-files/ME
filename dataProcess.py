@@ -387,8 +387,8 @@ class Utils():
         group_notes = torch.cat(group_notes)
         label = torch.cat(label)
         max_index = torch.max(group_notes)
-
-        for m in range(int(max_index.item()+1)):
+        denominator = int(max_index.item()+1)
+        for m in range(denominator):
             m_m = group_notes==m
             pred_collection_m = pred_collection[m_m] # (sample number, 7)
             label_m = label[m_m] # pick data by video index
@@ -418,9 +418,12 @@ class Utils():
             else: # if prediction is sole
                 final_pre = torch.topk(table, 1, dim=1)[1]
             final_pre_c = final_pre.cuda()
-            if final_pre_c == label_m[0]:
-                acc += 1
-        return acc / (max_index + 1)
+            if label_m.shape[0] == 0:
+                denominator -= 1
+            else:
+                if final_pre_c == label_m[0]:
+                    acc += 1
+        return acc / denominator
 
 class Dataprocess():
     def __init__(self):
@@ -745,10 +748,10 @@ class Dataprocess():
                     v_ix_copy[v_fs_shuffle[iind[0]:config['window_size'] + iind[0]]] = 1 # code in inner bracket means a slicing operation on variable v_fs_shuffle, code in outer bracket means a mask operation.
                     redundancy_matrix[i] = v_fs[v_ix_copy.astype(int).astype(bool)] # assignment
                 span = (redundancy_matrix.max(axis=1) - redundancy_matrix.min(axis=1))>= ori_video.shape[0]//2*1 # calulate the span of every standby sample, greater than some value will be selected as input sequence
-                if len(span)>=config['selected']: # number of qualified sample might be greater than we want, so if true, just select top 20 samples.
+                if np.sum(span!=0)>=config['selected']: # number of qualified sample might be greater than we want, so if true, just select top 20 samples.
                     samples = redundancy_matrix[span,:][:config['selected']]
                 else: # if not, take as many as possible
-                    samples = redundancy_matrix[span, :]
+                    samples = redundancy_matrix[:config['selected']]
                 for w in range(samples.shape[0]):
                     data.append(ori_video[list(samples[w].astype(int))])
                     target.append(label[f][0][0].astype(np.long))
@@ -1027,10 +1030,10 @@ class Dataprocess():
                     v_ix_copy[v_fs_shuffle[iind[0]:config['window_size'] + iind[0]]] = 1  # code in inner bracket means a slicing operation on variable v_fs_shuffle, code in outer bracket means a mask operation.
                     redundancy_matrix[i] = v_fs[v_ix_copy.astype(int).astype(bool)]  # assignment
                 span = (redundancy_matrix.max(axis=1) - redundancy_matrix.min(axis=1))>= ori_video.shape[0]//2*1 # calulate the span of every standby sample, greater than some value will be selected as input sequence
-                if len(span)>=config['selected']: # number of qualified sample might be greater than we want, so if true, just select top 20 samples.
+                if np.sum(span!=0)>=config['selected']: # number of qualified sample might be greater than we want, so if true, just select top 20 samples.
                     samples = redundancy_matrix[span,:][:config['selected']]
                 else: # if not, take as many as possible
-                    samples = redundancy_matrix[span, :]
+                    samples = redundancy_matrix[:config['selected']]
                 for w in range(samples.shape[0]):
                     data.append(ori_video[list(samples[w].astype(int))])
                     target.append(label[f][0][0].astype(np.long))
