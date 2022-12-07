@@ -36,23 +36,20 @@ class Modeltest(object):
                 checkpoint = torch.load(os.path.join(config['checkpoint_pth'],cp))
                 trans.load_state_dict(checkpoint['state_dict'])
                 label_val, feature_val, lms3d_val, seqs_val = Dataprocess.loadSingleFold(11-fold, True)
-                val_dataset = Dataprocess.ConvertVideo2Samples100Votes(config['window_size'], feature_val, lms3d_val, label_val,True) # variables in memory
-                portions = len(val_dataset) // 20 + 1 # GPU memory is not enough
+                val_dataloader = Dataprocess.ConvertVideo2Samples(config['window_size'], feature_val, lms3d_val, label_val,True) # variables in memory
                 pred_lst,label_lst,belong_lst=[], [], []
-                for po in range(portions):
-                    val_dataloader = torch.utils.data.DataLoader(val_dataset[po*20:po*20+20], shuffle=config['Shuffle'], batch_size=config['batch_size'])
-                    for input, target, attribution in val_dataloader:
-                        label_lst.append(target)
-                        with torch.no_grad():
-                            pred = trans(input, config['T_masked'])
-                        pred = cls.softmax(pred)
-                        pred_lst.append(pred)
-                        belong_lst.append(attribution)
-                        idx_pred = torch.topk(pred, 1, dim=1)[1]
-                        rs = idx_pred.eq(target.reshape(-1, 1))
-                        score += rs.view(-1).float().sum()
-                        total += input.shape[0]
-                        writer_acc_val.add_scalar('val acc', score / total * 100, checkpoint['epoch'])
+                for input, target, attribution in val_dataloader:
+                    label_lst.append(target)
+                    with torch.no_grad():
+                        pred = trans(input, config['T_masked'])
+                    pred = cls.softmax(pred)
+                    pred_lst.append(pred)
+                    belong_lst.append(attribution)
+                    idx_pred = torch.topk(pred, 1, dim=1)[1]
+                    rs = idx_pred.eq(target.reshape(-1, 1))
+                    score += rs.view(-1).float().sum()
+                    total += input.shape[0]
+                    writer_acc_val.add_scalar('val acc', score / total * 100, checkpoint['epoch'])
                 vote_acc = dataProcess.Utils.vote(pred_lst,belong_lst,label_lst)
                 if acc < score / total :
                     acc = score / total
@@ -60,7 +57,7 @@ class Modeltest(object):
                 if acc_hat<vote_acc:
                     acc_hat = vote_acc
                     logging.info(f'vote highest:{acc_hat*100}% when acc is {score / total*100}%, epoch is {checkpoint["epoch"]}')
-                print('epoch:',checkpoint['epoch'],(score/total).item()," ",vote_acc.item())
+                print('epoch:',checkpoint['epoch'],(score/total).item()," ",vote_acc)
 
     @classmethod
     def test(cls,epoch,fold):
@@ -111,7 +108,7 @@ class Modeltest(object):
                         acc_hat = vote_acc
                         logging.info(
                             f'vote highest:{acc_hat * 100}% when acc is {score / total * 100}%, epoch is {checkpoint["epoch"]}')
-                    print('epoch:', checkpoint['epoch'], (score / total).item(), " ", vote_acc.item())
+                    print('epoch:', checkpoint['epoch'], (score / total).item(), " ", vote_acc)
 
     @classmethod
     def baselineVal(cls, fold):
@@ -161,7 +158,7 @@ class Modeltest(object):
                     acc_hat = vote_acc
                     logging.info(
                         f'vote highest:{acc_hat * 100}% when acc is {score / total * 100}%, epoch is {checkpoint["epoch"]}')
-                print('epoch:', checkpoint['epoch'], (score / total).item(), " ", vote_acc.item())
+                print('epoch:', checkpoint['epoch'], (score / total).item(), " ", vote_acc)
 
     @classmethod
     def baselineTest(cls, epoch, fold):
@@ -210,7 +207,7 @@ class Modeltest(object):
                         acc_hat = vote_acc
                         logging.info(
                             f'vote highest:{acc_hat * 100}% when acc is {score / total * 100}%, epoch is {checkpoint["epoch"]}')
-                    print('epoch:', checkpoint['epoch'], (score / total).item(), " ", vote_acc.item())
+                    print('epoch:', checkpoint['epoch'], (score / total).item(), " ", vote_acc)
 
 def deleteStaticDict(pth,epoch):
     import torch
@@ -227,8 +224,8 @@ def deleteStaticDict(pth,epoch):
     for dele in delete_lst:
         os.remove(dele)
 if __name__ == '__main__':
-    # Modeltest.val(5)
+    Modeltest.val(5)
     # Modeltest.test(890,5)
     # deleteStaticDict('./',0)
     # Modeltest.baselineVal(5)
-    Modeltest.baselineTest(1000, 5)
+    # Modeltest.baselineTest(1000, 5)

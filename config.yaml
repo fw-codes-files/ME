@@ -51,9 +51,9 @@ FAN_evey_fold_checkpoint:
 PCA_dim: 64
 PCA_dir: './weights/pca.m'
 # data sample strategy config
-Least_frame: 0
-Max_frame: 71
-window_size: 71
+Least_frame: 20
+Max_frame: 40
+window_size: 10
 Sample_frequency: 1
 Shuffle: True
 standBy: 200

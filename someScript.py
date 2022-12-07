@@ -18,15 +18,12 @@ def checkCKplusDataset():
                 count += 1
     print(count)
     '''总数量正确，带label数据集已经由emotion-FAN确认'''
-
-
 def dicYaml():
     # yaml中存储dict数据类型测试
     import yaml
     cfg = yaml.safe_load(open('./config.yaml', 'r', encoding='utf-8').read())
     print(cfg['CK+_dict']['Happy'])
     print(type(float(cfg['learning_rate'])))
-
 def countSequenceLen():
     import os
     min_len = []
@@ -118,7 +115,6 @@ def testImageValue():
     print(img2[0][0][0] / 255)
 def testprint():
     print('a{b:.4f} ({b:.4f})'.format(b=2,c=3))
-
 def testsqueeze():
     a=np.zeros((1,3))
     b=np.zeros((2,3))
@@ -389,6 +385,9 @@ def countsamplemaxnumber():
 def sample():
     sam_idx = sorted(random.sample([S for S in range(71)], 71))
     print(sam_idx == [S for S in range(71)])
+def slice():
+    a = np.array([1,23,4])
+    print(a[:6])
 if __name__ == '__main__':
-    sample()
+    slice()
     pass
