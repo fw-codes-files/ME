@@ -45,6 +45,7 @@ class Modeltest(object):
                         label_lst.append(target)
                         with torch.no_grad():
                             pred = trans(input, config['T_masked'])
+                        pred = cls.softmax(pred)
                         pred_lst.append(pred)
                         belong_lst.append(attribution)
                         idx_pred = torch.topk(pred, 1, dim=1)[1]
@@ -94,6 +95,7 @@ class Modeltest(object):
                         label_lst.append(target)
                         with torch.no_grad():
                             pred = trans(input, config['T_masked'])
+                        pred = cls.softmax(pred)
                         pred_lst.append(pred)
                         belong_lst.append(attribution)
                         idx_pred = torch.topk(pred, 1, dim=1)[1]
@@ -228,5 +230,5 @@ if __name__ == '__main__':
     # Modeltest.val(5)
     # Modeltest.test(890,5)
     # deleteStaticDict('./',0)
-    Modeltest.baselineVal(5)
-    # Modeltest.baselineTest(2220, 5)
+    # Modeltest.baselineVal(5)
+    Modeltest.baselineTest(1000, 5)

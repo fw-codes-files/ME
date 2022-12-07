@@ -738,13 +738,13 @@ class Dataprocess():
                 for i in range(config['standBy']):
                     v_fs_shuffle = v_fs.copy()  # a cpoy for shuffle
                     iind = random.sample([xx for xx in range(ori_video.shape[0]//2)],1)
-                    temp = v_fs_shuffle[iind[0]:].copy()
+                    temp = v_fs_shuffle[iind[0]:min(ori_video.shape[0]//5*3+iind[0],ori_video.shape[0])].copy()
                     np.random.shuffle(temp) # every standby sample will be generated from origin video shuffled again (frames,)
-                    v_fs_shuffle[iind[0]:] = temp.copy()
+                    v_fs_shuffle[iind[0]:min(ori_video.shape[0]//5*3+iind[0],ori_video.shape[0])] = temp.copy()
                     v_ix_copy = v_ix.copy() # index copy
-                    v_ix_copy[v_fs_shuffle[:config['window_size']]] = 1 # code in inner bracket means a slicing operation on variable v_fs_shuffle, code in outer bracket means a mask operation.
+                    v_ix_copy[v_fs_shuffle[iind[0]:config['window_size'] + iind[0]]] = 1 # code in inner bracket means a slicing operation on variable v_fs_shuffle, code in outer bracket means a mask operation.
                     redundancy_matrix[i] = v_fs[v_ix_copy.astype(int).astype(bool)] # assignment
-                span = (redundancy_matrix.max(axis=1) - redundancy_matrix.min(axis=1))>= ori_video.shape[0]//3*2 # calulate the span of every standby sample, greater than some value will be selected as input sequence
+                span = (redundancy_matrix.max(axis=1) - redundancy_matrix.min(axis=1))>= ori_video.shape[0]//2*1 # calulate the span of every standby sample, greater than some value will be selected as input sequence
                 if len(span)>=config['selected']: # number of qualified sample might be greater than we want, so if true, just select top 20 samples.
                     samples = redundancy_matrix[span,:][:config['selected']]
                 else: # if not, take as many as possible
@@ -1014,16 +1014,19 @@ class Dataprocess():
                     samples_counter_lst.append(f)
             else:
                 # one video can generate any number samples
-                v_fs = np.arange(ori_video.shape[0]) # how many frames a video contains (frames,)
-                v_ix = np.zeros((v_fs.shape[0],)) # what frames will be sampled (frames,)
-                v_fs_shuffle = v_fs.copy() # a cpoy for shuffle
-                redundancy_matrix = np.zeros((config['standBy'], config['window_size'])) # a matrix stand for redundancy and sequence length, (how many standby samples, sequence length)
+                v_fs = np.arange(ori_video.shape[0])  # how many frames a video contains (frames,)
+                v_ix = np.zeros((v_fs.shape[0],))  # what frames will be sampled (frames,)
+                redundancy_matrix = np.zeros((config['standBy'], config['window_size']))  # a matrix stand for redundancy and sequence length, (how many standby samples, sequence length)
                 for i in range(config['standBy']):
-                    np.random.shuffle(v_fs_shuffle) # every standby sample will be generated from origin video shuffled again (frames,)
-                    v_ix_copy = v_ix.copy() # index copy
-                    v_ix_copy[v_fs_shuffle[:config['window_size']]] = 1 # code in inner bracket means a slicing operation on variable v_fs_shuffle, code in outer bracket means a mask operation.
-                    redundancy_matrix[i] = v_fs[v_ix_copy.astype(int).astype(bool)] # assignment
-                span = (redundancy_matrix.max(axis=1) - redundancy_matrix.min(axis=1))>= ori_video.shape[0]//3*2 # calulate the span of every standby sample, greater than some value will be selected as input sequence
+                    v_fs_shuffle = v_fs.copy()  # a cpoy for shuffle
+                    iind = random.sample([xx for xx in range(ori_video.shape[0] // 2)], 1)
+                    temp = v_fs_shuffle[iind[0]:min(ori_video.shape[0] // 5 * 3 + iind[0], ori_video.shape[0])].copy()
+                    np.random.shuffle(temp)  # every standby sample will be generated from origin video shuffled again (frames,)
+                    v_fs_shuffle[iind[0]:min(ori_video.shape[0] // 5 * 3 + iind[0], ori_video.shape[0])] = temp.copy()
+                    v_ix_copy = v_ix.copy()  # index copy
+                    v_ix_copy[v_fs_shuffle[iind[0]:config['window_size'] + iind[0]]] = 1  # code in inner bracket means a slicing operation on variable v_fs_shuffle, code in outer bracket means a mask operation.
+                    redundancy_matrix[i] = v_fs[v_ix_copy.astype(int).astype(bool)]  # assignment
+                span = (redundancy_matrix.max(axis=1) - redundancy_matrix.min(axis=1))>= ori_video.shape[0]//2*1 # calulate the span of every standby sample, greater than some value will be selected as input sequence
                 if len(span)>=config['selected']: # number of qualified sample might be greater than we want, so if true, just select top 20 samples.
                     samples = redundancy_matrix[span,:][:config['selected']]
                 else: # if not, take as many as possible
@@ -1052,6 +1055,7 @@ class Dataprocess():
         detector = dlib.get_frontal_face_detector()
         sp = dlib.shape_predictor('F:/conda/envs/ak/micro-expressions/shape_predictor_68_face_landmarks.dat')
         image = cv2.imread('F:/conda/envs/ak/emotion_FAN/data/face/ck_face/S005/001/S005_001_00000011.png')
+        cv2.imshow('224*224',image)
         image_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         faces = detector(image_gray)
         landmarks = sp(image_gray,faces[0])
@@ -1066,7 +1070,7 @@ class Dataprocess():
             # cv2.waitKey(0)
             # cv2.circle(image,(int(x),int(y)),2,[0,255,0])
         image = image*mask.reshape((224,224,1))
-        cv2.imshow('img',image/255)
+        cv2.imshow('patch',image/255)
         cv2.waitKey(0)
         # dlib bounding box
         # dlib landmarks
