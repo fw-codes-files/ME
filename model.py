@@ -464,3 +464,48 @@ class ViLT(nn.Module):
         output_emb = self.encoder(input_emb)
         pred = self.MLP(output_emb[:, 0, :])
         return pred
+
+class MultiEmoTransformer(nn.Module):
+    def __init__(self,lms3dpro, rgbpro, input, nhead, num_layers, batch_first, output_dim):  # bs first True
+        '''
+            1. embedding layer is may be needed, because more parameters has more fitting capacity.
+            2. position encoding layer has one more position for cls token, thus, concatenation cls token to input follows embedding.
+            3. transformer does not care seq_len.
+            4. after encoder, cls token will be used for classification.
+            5. encoder has normalization layer, input data normalizing is no needed?
+        '''
+        from torch.nn import TransformerEncoder, TransformerEncoderLayer
+        from dataProcess import config
+        super(MultiEmoTransformer, self).__init__()
+        d_model = config['T_input_dim']
+        self.lms3d_embedding = nn.Sequential(nn.Linear(config['T_lms3d_dim'], config['T_pro_dim']))
+        self.rgb_embedding = nn.Sequential(nn.Linear(config['T_rgb_dim'], config['T_pro_dim']))
+        self.input_embedding = nn.Sequential(nn.Linear(config['T_pro_dim']*2, d_model))
+        self.cls_token = nn.Parameter(torch.randn(1, 1, d_model))
+        self.pos_embedding = nn.Parameter(torch.randn(1, config['window_size'] + 1, d_model))
+        self.encoder_layer = TransformerEncoderLayer(d_model=d_model, nhead=nhead, batch_first=batch_first,
+                                                     dim_feedforward=config['T_forward_dim'],
+                                                     activation=config['T_activation'])
+        self.transformer_encoder = TransformerEncoder(self.encoder_layer, num_layers=num_layers)
+        self.pred = nn.Sequential(nn.Linear(d_model, output_dim))
+    def forward(self, lms3d, rgb, att_mask: bool = False):
+        l = self.lms3d_embedding(lms3d)
+        r = self.rgb_embedding(rgb)
+        x = torch.cat((l,r),dim=2)
+        tem_m = torch.sum(x, dim=2)  # (bs, seq_len)
+        x = self.input_embedding(x)  # (bs,seq_len,d_model)
+        cls_tokens = torch.tile(self.cls_token, (x.shape[0], 1, 1))  # (bs,1,d_model)
+        cls_x = torch.cat((cls_tokens, x), dim=1)  # (bs,seq_len + 1,d_model)
+        # make a key padding mask matrix
+        mask_m = tem_m == 0  # (bs, seq_len)
+        cls_m = torch.zeros((x.shape[0], 1), dtype=torch.bool).cuda()
+        mask_m = torch.cat((cls_m, mask_m), dim=1)  # (bs, seq_len+1)
+        cls_x += self.pos_embedding
+        # cls_x = cls_x + Variable(self.pe[:, :cls_x.size(1)],requires_grad=False).cuda() # (bs,seq_len + 1,d_model)
+        if att_mask:
+            x_ = self.transformer_encoder(cls_x, src_key_padding_mask=mask_m)  # (bs,seq_len + 1,d_model)
+            self.transformer_encoder.layers
+        else:
+            x_ = self.transformer_encoder(cls_x)
+        v_feature = x_[:, 0, :]  # (bs,1,d_model)
+        return self.pred(v_feature)

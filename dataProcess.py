@@ -722,8 +722,8 @@ class Dataprocess():
             # lms3d[f] = (lms3d[f] - l_mean.reshape(-1, 1)) / l_std.reshape(-1, 1)
 
             # concatnate and align to ws -- video level
-            # ori_video = np.hstack((feature[f][:,:512], lms3d[f]))
-            ori_video = lms3d[f]
+            ori_video = np.hstack((feature[f][:,:512], lms3d[f]))
+            # ori_video = lms3d[f]
             if ori_video.shape[0] < ws:
                 # EOS
                 EOS_num = ws - ori_video.shape[0]

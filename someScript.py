@@ -388,6 +388,19 @@ def sample():
 def slice():
     a = np.array([1,23,4])
     print(a[:6])
+def observeData():
+    lms = np.loadtxt('./dataset/3dlms_fold1_test.txt')
+    rgb = np.loadtxt('./dataset/feature1.txt')
+    lms0 = lms[:68].reshape((1,204))
+    rgb0 = rgb[0].reshape((1,512))
+    meanl = np.mean(lms0,axis=1)
+    # meanr = np.mean(rgb0,axis=1)
+    stdl = np.std(lms0,axis=1)
+    # stdr = np.std(rgb0,axis=1)
+    lms0 = (lms0 - meanl)/stdl
+    # rgb0 = (rgb0 - meanr)/stdr
+    print(lms0)
+    print(rgb0)
 if __name__ == '__main__':
-    slice()
+    observeData()
     pass

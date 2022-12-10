@@ -798,11 +798,67 @@ class AutoEncoder():
         pcd_pc.colors = o3d.utility.Vector3dVector(cl1)
         o3d.visualization.draw_geometries([pcd_s, pcd_pc])
         return
-
+class Two_tsm_train():
+    def __init__(self):
+        pass
+    @classmethod
+    def train(cls, epoch):
+        from model import MultiEmoTransformer
+        from torch.utils.tensorboard import SummaryWriter
+        f_lst = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        trans = MultiEmoTransformer(lms3dpro = config['T_lms3d_dim'], rgbpro = config['T_rgb_dim'], input=config['T_input_dim'], nhead=config['T_head_num'], num_layers=config['T_block_num'], batch_first=config['T_bs_first'], output_dim=config['T_output_dim'])
+        trans.cuda()
+        optimizer = torch.optim.Adam(trans.parameters(), lr=1e-6, weight_decay=0.05)
+        loss_func = torch.nn.CrossEntropyLoss()
+        f_lst.remove(config['test_fold'])
+        f_lst.remove(11 - config['test_fold'])
+        label, lms3d, feature, seqs = np.zeros((0,)), np.zeros((0,)), np.zeros((0,)), np.zeros((0,))
+        for c in f_lst:
+            train_label_c, train_feature_c, train_lms3d_c, train_seqs_c = Dataprocess.loadSingleFold(c, True)
+            label = np.concatenate((label, train_label_c))
+            lms3d = np.concatenate((lms3d, train_lms3d_c))
+            feature = np.concatenate((feature, train_feature_c))
+            seqs = np.concatenate((seqs, train_seqs_c))
+        train_dataloader = Dataprocess.ConvertVideo2Samples(config['window_size'], feature, lms3d, label, False)
+        writer_loss = SummaryWriter(f'./tb/loss/train/')
+        writer_acc_train = SummaryWriter(f'./tb/acc/train/')
+        for e in range(epoch):
+            trans.train()
+            score, total = 0, 0
+            for input, target in train_dataloader:
+                optimizer.zero_grad()
+                pred = trans(input[:,:,512:],input[:,:,:512], config['T_masked'])
+                loss = loss_func(pred, target.long())
+                loss.backward()
+                optimizer.step()
+                idx_pred = torch.topk(pred, 1, dim=1)[1]
+                rs = idx_pred.eq(target.reshape(-1, 1))
+                score += rs.view(-1).float().sum()
+                total += input.shape[0]
+            sacal_loss = loss.detach().cpu()
+            writer_loss.add_scalar('train loss', sacal_loss, e)
+            print('\r' + f'epoch:{e} loss:{loss} acc:{score / total * 100}% ', end='', flush=True)
+            writer_acc_train.add_scalar('train acc', score / total * 100, e)
+            if e % 10 == 0:
+                checkpoints = {'model_type': 'ViT',
+                               'epoch': e,
+                               'bs': config["batch_size"],
+                               'lr': config["learning_rate"],
+                               'ln': config["T_block_num"],
+                               'hd': config["T_head_num"],
+                               'ws': config["window_size"],
+                               'mask': config["T_masked"],
+                               'input_dim': config["T_input_dim"],
+                               'proj_dim': config["T_proj_dim"],
+                               'forward_dim': config["T_forward_dim"],
+                               'state_dict': trans.state_dict()}
+                torch.save(checkpoints, f'E:/ViT/{config["test_fold"]}test_{11 - config["test_fold"]}val_{time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())}.pkl')
+        logging.info( f'------------------------------------train ends, train folds:1,2,3,4,7,8,9,10-----------------------------------------------')
+        send('2070 train result', f'{config["LOG_CHECK"]}')
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='train function choice')
-    parser.add_argument('-M', default='baseline84', type=str, metavar='N',
+    parser.add_argument('-M', default='2m84', type=str, metavar='N',
                         help='s means single and m means minibatch')
     args = parser.parse_args()
     if args.M == 'single': # lstm train with bs=1
@@ -829,5 +885,7 @@ def main():
         Transformer_traintest.linearVote(config['epoch'])
     elif args.M == 'baseline84': # baseline
         Transformer_traintest.baseline84((config['epoch']))
+    elif args.M == '2m84':
+        Two_tsm_train.train(config['epoch'])
 if __name__ == '__main__':
     main()

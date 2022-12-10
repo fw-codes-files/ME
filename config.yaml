@@ -65,7 +65,10 @@ LSTM_output_dim: 7
 LSTM_layerNum: 1
 LSTM_cell: 'LSTM'
 # Tansformer config
-T_input_dim: 204
+T_lms3d_dim: 204
+T_rgb_dim: 512
+T_pro_dim: 256
+T_input_dim: 2048
 T_block_num: 6
 T_head_num: 8
 T_proj_dim: 2048
@@ -103,5 +106,5 @@ checkpoint_pth: 'E:/ViT'
 # data Post process config
 vote: False
 # log information config
-LOG_CHECK: '!!!ViT: 3dlms, 56 test fold, MLP[cls], 8 head, learnable PE, gelu, 5000 epoch, 6 block, 2048 forward dim, 2048 input embedding, 10 ws, 8 bs, masked, shuffle True, baseline !!!'
+LOG_CHECK: '!!!ViT: 3dlms + rgb, 56 test fold, MLP[cls], 8 head, learnable PE, gelu, 5000 epoch, 6 block, 2048 forward dim, 2048 input embedding, 10 ws, 8 bs, masked, shuffle True !!!'
 LOG_pth: 'train.log'
