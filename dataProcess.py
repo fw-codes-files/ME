@@ -2,7 +2,6 @@ import random
 import numpy as np
 import cv2
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 from itertools import chain
 import yaml
 import pdb

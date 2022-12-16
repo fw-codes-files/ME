@@ -5,7 +5,6 @@ import numpy as np
 
 import dataProcess
 
-os.environ['CUDA_VISIBLE_DEVICES']='0'
 import torch
 from dataProcess import Dataprocess
 from model import LSTMModel
