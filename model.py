@@ -384,13 +384,13 @@ class EmoTransformer(nn.Module):
         super(EmoTransformer, self).__init__()
         d_model = config['T_proj_dim']
         self.input_embedding = nn.Sequential(nn.Linear(input, d_model))
-        pe = torch.zeros(25 + 1, d_model)  # add cls token
-        position = torch.arange(0, 26).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * -(math.log(10000.0) / d_model))
-        pe[:, 0::2] = torch.sin(position * div_term)  # sin
-        pe[:, 1::2] = torch.cos(position * div_term)  # cos
+        # pe = torch.zeros(25 + 1, d_model)  # add cls token
+        # position = torch.arange(0, 26).unsqueeze(1)
+        # div_term = torch.exp(torch.arange(0, d_model, 2) * -(math.log(10000.0) / d_model))
+        # pe[:, 0::2] = torch.sin(position * div_term)  # sin
+        # pe[:, 1::2] = torch.cos(position * div_term)  # cos
         self.cls_token = nn.Parameter(torch.randn(1, 1, d_model))
-        self.pe = pe.unsqueeze(0)
+        # self.pe = pe.unsqueeze(0)
         self.pos_embedding = nn.Parameter(torch.randn(1, config['window_size'] + 1, d_model))
         self.encoder_layer = TransformerEncoderLayer(d_model=d_model, nhead=nhead, batch_first=batch_first,
                                                      dim_feedforward=config['T_forward_dim'],
@@ -477,7 +477,7 @@ class MultiEmoTransformer(nn.Module):
         from torch.nn import TransformerEncoder, TransformerEncoderLayer
         from dataProcess import config
         super(MultiEmoTransformer, self).__init__()
-        d_model = config['T_input_dim']
+        d_model = config['T_proj_dim']
         self.lms3d_embedding = nn.Sequential(nn.Linear(config['T_lms3d_dim'], config['T_pro_dim']))
         self.rgb_embedding = nn.Sequential(nn.Linear(config['T_rgb_dim'], config['T_pro_dim']))
         self.input_embedding = nn.Sequential(nn.Linear(config['T_pro_dim']*2, d_model))
@@ -504,8 +504,49 @@ class MultiEmoTransformer(nn.Module):
         # cls_x = cls_x + Variable(self.pe[:, :cls_x.size(1)],requires_grad=False).cuda() # (bs,seq_len + 1,d_model)
         if att_mask:
             x_ = self.transformer_encoder(cls_x, src_key_padding_mask=mask_m)  # (bs,seq_len + 1,d_model)
-            self.transformer_encoder.layers
+            # self.transformer_encoder.layers
         else:
             x_ = self.transformer_encoder(cls_x)
         v_feature = x_[:, 0, :]  # (bs,1,d_model)
         return self.pred(v_feature)
+
+from util.config import cfg
+class MAEEncoder(nn.Module):
+    def __init__(self, embed_dim=1024, depth=24, num_heads=16,
+                 mlp_ratio=4., norm_layer=nn.LayerNorm, norm_pix_loss=False):
+        super().__init__()
+        from timm.models.vision_transformer import Block
+        # --------------------------------------------------------------------------
+        self.encoder_embed = nn.Linear(cfg.input_len, embed_dim)  # bias = True
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        self.pos_embed = nn.Parameter(torch.zeros(1, cfg.seq_len + 1, embed_dim), requires_grad=False)  # fixed sin-cos embedding
+
+        self.blocks = nn.ModuleList([
+            Block(embed_dim, num_heads, mlp_ratio, qkv_bias=True, qk_scale=None, norm_layer=norm_layer, drop=0.1)
+            for i in range(depth)])
+        self.pred = nn.Linear(embed_dim, cfg.train_out_dim)
+        self.norm_pix_loss = norm_pix_loss
+
+        self.initialize_weights()
+    def initialize_weights(self):
+        import numpy as np
+        from util.pos_embed import get_1d_sincos_pos_embed_from_grid
+        pos_embed = get_1d_sincos_pos_embed_from_grid(self.pos_embed.shape[-1], np.arange(cfg.seq_len + 1))
+        self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
+
+    def forward(self, x):
+        # with torch.no_grad():
+        x = self.encoder_embed(x)
+        # add pos embed w/o cls token
+        x = x + self.pos_embed[:, 1:, :]  # 传播算法
+
+        # append cls token
+        cls_token = self.cls_token + self.pos_embed[:, :1, :]
+        cls_tokens = cls_token.expand(x.shape[0], -1, -1)
+        x = torch.cat((cls_tokens, x), dim=1)
+
+        # apply Transformer blocks
+        for blk in self.blocks:
+            x = blk(x)
+        return self.pred(x[:,0,:])
+

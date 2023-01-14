@@ -1,6 +1,6 @@
 import os
 import time
-
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 import numpy as np
 
 import dataProcess
@@ -12,7 +12,7 @@ import yaml
 from tqdm import trange
 import logging
 import math
-from mail import send
+# from mail import send
 config = yaml.safe_load(open('./config.yaml'))
 
 logging.basicConfig(format='%(asctime)s - %(filename)s[line:%(lineno)d] - %(levelname)s: %(message)s',
@@ -604,7 +604,7 @@ class Transformer_traintest():
             writer_loss.add_scalar('train loss', sacal_loss, e)
             print('\r' + f'epoch:{e} loss:{loss} acc:{score / total * 100}% ', end='', flush=True)
             writer_acc_train.add_scalar('train acc', score / total * 100, e)
-            if e % 10 == 0:
+            if e % 1 == 0:
                 checkpoints = {'model_type': 'ViT',
                                'epoch':e,
                                'bs': config["batch_size"],
@@ -617,7 +617,7 @@ class Transformer_traintest():
                                'proj_dim': config["T_proj_dim"],
                                'forward_dim': config["T_forward_dim"],
                                'state_dict': trans.state_dict()}
-                torch.save(checkpoints, f'E:/ViT/{config["test_fold"]}test_{11 - config["test_fold"]}val_{time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())}.pkl')
+                torch.save(checkpoints, f'/home/exp-10086/Project/Data/ViT/{config["test_fold"]}test_{11 - config["test_fold"]}val_{time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())}.pkl')
         logging.info(f'------------------------------------train ends, train folds:1,2,3,4,7,8,9,10-----------------------------------------------')
         send('2070 train result', f'{config["LOG_CHECK"]}')
 
@@ -804,60 +804,115 @@ class Two_tsm_train():
     def train(cls, epoch):
         from model import MultiEmoTransformer
         from torch.utils.tensorboard import SummaryWriter
-        f_lst = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-        trans = MultiEmoTransformer(lms3dpro = config['T_lms3d_dim'], rgbpro = config['T_rgb_dim'], input=config['T_input_dim'], nhead=config['T_head_num'], num_layers=config['T_block_num'], batch_first=config['T_bs_first'], output_dim=config['T_output_dim'])
-        trans.cuda()
-        optimizer = torch.optim.Adam(trans.parameters(), lr=1e-6, weight_decay=0.05)
+        for i in range(1,11):
+            f_lst = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+            trans = MultiEmoTransformer(lms3dpro = config['T_lms3d_dim'], rgbpro = config['T_rgb_dim'], input=config['T_input_dim'], nhead=config['T_head_num'], num_layers=config['T_block_num'], batch_first=config['T_bs_first'], output_dim=config['T_output_dim'])
+            trans.cuda()
+            optimizer = torch.optim.Adam(trans.parameters(), lr=1e-6, weight_decay=0.05)
+            loss_func = torch.nn.CrossEntropyLoss()
+            f_lst.remove(i)
+            label, lms3d, feature, seqs = np.zeros((0,)), np.zeros((0,)), np.zeros((0,)), np.zeros((0,))
+            for c in f_lst:
+                train_label_c, train_feature_c, train_lms3d_c, train_seqs_c = Dataprocess.loadSingleFold(c, True)
+                label = np.concatenate((label, train_label_c))
+                lms3d = np.concatenate((lms3d, train_lms3d_c))
+                feature = np.concatenate((feature, train_feature_c))
+                seqs = np.concatenate((seqs, train_seqs_c))
+            train_dataloader = Dataprocess.ConvertVideo2Samples(config['window_size'], feature, lms3d, label, False)
+            writer_loss = SummaryWriter(f'./tb/loss/train/')
+            writer_acc_train = SummaryWriter(f'./tb/acc/train/')
+            for e in range(1,epoch+1):
+                trans.train()
+                score, total = 0, 0
+                for input, target in train_dataloader:
+                    optimizer.zero_grad()
+                    pred = trans(input[:,:,512:],input[:,:,:512], config['T_masked'])
+                    loss = loss_func(pred, target.long())
+                    loss.backward()
+                    optimizer.step()
+                    idx_pred = torch.topk(pred, 1, dim=1)[1]
+                    rs = idx_pred.eq(target.reshape(-1, 1))
+                    score += rs.view(-1).float().sum()
+                    total += input.shape[0]
+                sacal_loss = loss.detach().cpu()
+                writer_loss.add_scalar('train loss', sacal_loss, e)
+                print('\r' + f'epoch:{e} loss:{loss} acc:{score / total * 100}% ', end='', flush=True)
+                writer_acc_train.add_scalar('train acc', score / total * 100, e)
+                if e % 5 == 0:
+                    checkpoints = {'model_type': 'ViT',
+                                   'epoch': e,
+                                   'bs': config["batch_size"],
+                                   'lr': config["learning_rate"],
+                                   'ln': config["T_block_num"],
+                                   'hd': config["T_head_num"],
+                                   'ws': config["window_size"],
+                                   'mask': config["T_masked"],
+                                   'input_dim': config["T_input_dim"],
+                                   'proj_dim': config["T_proj_dim"],
+                                   'forward_dim': config["T_forward_dim"],
+                                   'state_dict': trans.state_dict()}
+                    torch.save(checkpoints, f'/media/exp-10086/Elements SE/ViT/{i}test_{e}.pkl')
+            logging.info( f'------------------------------------train ends, train folds:{f_lst}-----------------------------------------------')
+            # send('2080ti train result', f'{config["LOG_CHECK"]}')
+    @classmethod
+    def pre2train(cls, epoch):
+        from model import MAEEncoder
+        from torch.utils.tensorboard import SummaryWriter
+        import timm.optim.optim_factory as optim_factory
+        from dataProcess import Utils
+
         loss_func = torch.nn.CrossEntropyLoss()
-        f_lst.remove(config['test_fold'])
-        f_lst.remove(11 - config['test_fold'])
-        label, lms3d, feature, seqs = np.zeros((0,)), np.zeros((0,)), np.zeros((0,)), np.zeros((0,))
-        for c in f_lst:
-            train_label_c, train_feature_c, train_lms3d_c, train_seqs_c = Dataprocess.loadSingleFold(c, True)
-            label = np.concatenate((label, train_label_c))
-            lms3d = np.concatenate((lms3d, train_lms3d_c))
-            feature = np.concatenate((feature, train_feature_c))
-            seqs = np.concatenate((seqs, train_seqs_c))
-        train_dataloader = Dataprocess.ConvertVideo2Samples(config['window_size'], feature, lms3d, label, False)
-        writer_loss = SummaryWriter(f'./tb/loss/train/')
-        writer_acc_train = SummaryWriter(f'./tb/acc/train/')
-        for e in range(epoch):
+        for i in range(1,11):
+            f_lst = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+            trans = MAEEncoder(embed_dim=config['T_proj_dim'], depth=config['T_block_num'], num_heads=config['T_head_num'])
+            checkpoint = '/home/exp-10086/Project/mae-main/output_dir0/checkpoint-399.pth'
+            state_dict = torch.load(checkpoint)
+            trans = Utils.loadKeys(trans, state_dict['model'])
+            trans.cuda()
             trans.train()
-            score, total = 0, 0
-            for input, target in train_dataloader:
-                optimizer.zero_grad()
-                pred = trans(input[:,:,512:],input[:,:,:512], config['T_masked'])
-                loss = loss_func(pred, target.long())
-                loss.backward()
-                optimizer.step()
-                idx_pred = torch.topk(pred, 1, dim=1)[1]
-                rs = idx_pred.eq(target.reshape(-1, 1))
-                score += rs.view(-1).float().sum()
-                total += input.shape[0]
-            sacal_loss = loss.detach().cpu()
-            writer_loss.add_scalar('train loss', sacal_loss, e)
-            print('\r' + f'epoch:{e} loss:{loss} acc:{score / total * 100}% ', end='', flush=True)
-            writer_acc_train.add_scalar('train acc', score / total * 100, e)
-            if e % 10 == 0:
-                checkpoints = {'model_type': 'ViT',
-                               'epoch': e,
-                               'bs': config["batch_size"],
-                               'lr': config["learning_rate"],
-                               'ln': config["T_block_num"],
-                               'hd': config["T_head_num"],
-                               'ws': config["window_size"],
-                               'mask': config["T_masked"],
-                               'input_dim': config["T_input_dim"],
-                               'proj_dim': config["T_proj_dim"],
-                               'forward_dim': config["T_forward_dim"],
-                               'state_dict': trans.state_dict()}
-                torch.save(checkpoints, f'E:/ViT/{config["test_fold"]}test_{11 - config["test_fold"]}val_{time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())}.pkl')
-        logging.info( f'------------------------------------train ends, train folds:1,2,3,4,7,8,9,10-----------------------------------------------')
-        send('2070 train result', f'{config["LOG_CHECK"]}')
+            param_groups = optim_factory.add_weight_decay(trans, 0.05)
+            optimizer = torch.optim.AdamW(param_groups, lr=1e-3, betas=(0.9, 0.95))
+            f_lst.remove(i)
+            # f_lst.remove(11 - config['test_fold'])
+            label, lms3d, feature, seqs = np.zeros((0,)), np.zeros((0,)), np.zeros((0,)), np.zeros((0,))
+            for c in f_lst:
+                train_label_c, train_feature_c, train_lms3d_c, train_seqs_c = Dataprocess.loadSingleFold(c, True)
+                label = np.concatenate((label, train_label_c))
+                lms3d = np.concatenate((lms3d, train_lms3d_c))
+                feature = np.concatenate((feature, train_feature_c))
+                seqs = np.concatenate((seqs, train_seqs_c))
+            train_dataloader = Dataprocess.ConvertVideo2Samples(config['window_size'], feature, lms3d, label, False)
+            writer_loss = SummaryWriter(f'./tb/loss/pretrain/{i}/')
+            writer_acc_train = SummaryWriter(f'./tb/acc/pretrain/{i}/')
+            for e in range(epoch):
+                score, total = 0, 0
+                for input, target in train_dataloader:
+                    optimizer.zero_grad()
+                    pred = trans(input)
+                    loss = loss_func(pred, target.long())
+                    loss.backward()
+                    optimizer.step()
+                    idx_pred = torch.topk(pred, 1, dim=1)[1]
+                    rs = idx_pred.eq(target.reshape(-1, 1))
+                    score += rs.view(-1).float().sum()
+                    total += input.shape[0]
+                sacal_loss = loss.detach().cpu()
+                writer_loss.add_scalar('train loss', sacal_loss, e)
+                print('\r' + f'epoch:{e} loss:{loss} acc:{score / total * 100}% lr:{optimizer.param_groups[0]["lr"]}', end='', flush=True)
+                writer_acc_train.add_scalar('train acc', score / total * 100, e)
+                if e % 1 == 0:
+                    checkpoints = {'model_type': 'ViT',
+                                   'epoch': e,
+                                   'input_dim': config["T_input_dim"],
+                                   'proj_dim': config["T_proj_dim"],
+                                   'state_dict': trans.state_dict()}
+                    # torch.save(checkpoints,f'/home/exp-10086/Project/Data/ViT/{config["test_fold"]}test_{11 - config["test_fold"]}val_{time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())}.pkl')
+                    torch.save(checkpoints,f'/home/exp-10086/Project/Data/ViT/{i}test_{e}.pkl')
+            logging.info(f'------------------------------------train ends, train folds:{f_lst}-----------------------------------------------')
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='train function choice')
-    parser.add_argument('-M', default='2m84', type=str, metavar='N',
+    parser.add_argument('-M', default='pretrain', type=str, metavar='N',
                         help='s means single and m means minibatch')
     args = parser.parse_args()
     if args.M == 'single': # lstm train with bs=1
@@ -886,5 +941,7 @@ def main():
         Transformer_traintest.baseline84((config['epoch']))
     elif args.M == '2m84':
         Two_tsm_train.train(config['epoch'])
+    elif args.M == 'pretrain':
+        Two_tsm_train.pre2train(config['epoch'])
 if __name__ == '__main__':
     main()

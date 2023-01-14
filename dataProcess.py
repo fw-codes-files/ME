@@ -11,7 +11,6 @@ import torch.utils.data as data
 from utils.pose import viz_pose
 from sklearn.decomposition import PCA
 import joblib
-
 ##################
 #global variables#
 ##################
@@ -22,6 +21,8 @@ EOS = np.zeros((1, config['T_input_dim']))  # padding of origin 3d lms data sequ
 AE_EOS = np.zeros((1, config['AE_mid_dim']))  # padding of AE mid feature sequence
 standardImg = cv2.imread('./img.png')  # used to through 3DDFA net, then pointcloud produced by this picture will be a standard face pose. All face pose will be aligned to this face's pointcloud pose
 softmax = torch.nn.Softmax(dim=1)
+p_m = joblib.load('/home/exp-10086/Project/mae-main/util/pca.m')
+
 
 class LSTMDataSet(data.Dataset):
     '''
@@ -135,11 +136,7 @@ class Utils():
         img = img.reshape(1, img.shape[0], img.shape[1], 3)
         with torch.no_grad():
             boxes = t.face_boxes(img)  # (bs, faces)
-            print(pth,boxes)
             param_lst, roi_box_lst, boxed_imgs, deltaxty_lst = t.tddfa(img,boxes)  # param_lst(faces(62 = 12 + 40 +10))  roi_box_lst(bs,faces) boxed_imgs(faces) deltaxty_lst(bs, faces)
-            print(boxed_imgs[0].shape)
-            cv2.imshow('box_img',boxed_imgs[0])
-            cv2.waitKey(0)
             ver_dense, ver_lst = t.tddfa.recon_vers(param_lst, list(chain(*roi_box_lst)),
                                                     dense_flag=config['3DDFA_dense'])  # ver_dense(faces) ver_lst(faces)
             if not type(ver_lst) in [tuple, list]:
@@ -170,23 +167,6 @@ class Utils():
                     aligned_boxed_img = np.swapaxes(aligned_boxed_img, 0, 2)
                     aligned_boxed_img = np.swapaxes(aligned_boxed_img, 1, 2)
                     f, alpha = t.FAN(torch.from_numpy(aligned_boxed_img).unsqueeze(0).float().cuda() / 255, phrase='eval')  # 改用拼接特征
-                    me = f.detach().cpu().numpy()
-                    import matplotlib.pyplot as plt
-                    from pylab import mpl
-                    mpl.rcParams['font.sans-serif'] = ['SimHei']  # 添加这条可以让图形显示中文
-                    x_axis_data = [i for i in range(512)]
-                    # plot中参数的含义分别是横轴值，纵轴值，线的形状，颜色，透明度,线的宽度和标签
-                    qy = np.loadtxt('F:/conda/envs/ak/emotion_FAN/em.txt')
-                    plt.plot(x_axis_data, me.reshape((512,)), 'ro-', color='r', alpha=0.8, linewidth=1, label='整合')
-                    # plt.plot(x_axis_data, qy.reshape((512,)), 'ro-', color='g', alpha=0.8, linewidth=1, label='乔羽')
-
-                    # 显示标签，如果不加这句，即使在plot中加了label='一些数字'的参数，最终还是不会显示标签
-                    plt.legend(loc="upper right")
-                    plt.xlabel('x轴数字')
-                    plt.ylabel('y轴数字')
-
-                    plt.show()
-                    return
                     # np_f = f.cpu().numpy()
                 np_label = np.array([label_])
                 cs = torch.empty(0)
@@ -203,7 +183,7 @@ class Utils():
                 # pcd = o3d.geometry.PointCloud()
                 # pcd.points = o3d.utility.Vector3dVector(np.vstack((pc,ver_lst[ibn].T)))
                 # o3d.visualization.draw_geometries([pcd])
-            # return f, alpha, ver_lst, np_label, pc
+            return f, alpha, ver_lst, np_label, pc
 
     @classmethod
     def loadAllCKPlus(cls, pth, t):
@@ -424,6 +404,13 @@ class Utils():
                     acc += 1
         return acc / denominator
 
+    @classmethod
+    def loadKeys(cls, model, static_dict):
+        for key in model.state_dict().keys():
+            if key == 'pred.weight' or key == 'pred.bias':
+                continue
+            model.state_dict()[key] = static_dict[key]
+        return model
 class Dataprocess():
     def __init__(self):
         pass
@@ -716,12 +703,13 @@ class Dataprocess():
             # f_std = np.std(feature[f][:,:512], axis=1)
             # feature[f][:,:512] = (feature[f][:,:512] - f_mean.reshape(-1, 1)) / f_std.reshape(-1, 1)
 
-            # l_mean = np.mean(lms3d[f], axis=1)
-            # l_std = np.std(lms3d[f], axis=1)
-            # lms3d[f] = (lms3d[f] - l_mean.reshape(-1, 1)) / l_std.reshape(-1, 1)
+            l_mean = np.mean(lms3d[f], axis=1)
+            l_std = np.std(lms3d[f], axis=1)
+            lms3d[f] = (lms3d[f] - l_mean.reshape(-1, 1)) / l_std.reshape(-1, 1)
 
             # concatnate and align to ws -- video level
-            ori_video = np.hstack((feature[f][:,:512], lms3d[f]))
+            # ori_video = np.hstack((feature[f][:,:512], lms3d[f]))
+            ori_video = np.hstack((lms3d[f], feature[f][:,:512]))
             # ori_video = lms3d[f]
             if ori_video.shape[0] < ws:
                 # EOS
@@ -861,13 +849,15 @@ class Dataprocess():
         # opt.background_color = np.asarray([0, 0, 0])
         # opt.point_size = 5
         # opt.show_coordinate_frame = True
+
         label_test = np.loadtxt(f'./dataset/label_fold{fold}_test.txt').reshape(-1, 1)
         test = np.loadtxt(f'./dataset/feature{fold}.txt')
+        test_pca = p_m.transform(test) # pca decomposition
         lms3d_test = np.loadtxt(f'./dataset/3dlms_fold{fold}_test.txt')
         split_test = np.loadtxt(f'./dataset/split_{fold}_test.txt')
         if crop:
             test_seqs, test_l = Utils.insertOrSample(split_test.astype(np.int_), label_test.astype(np.float32))
-            _, test_feature = Utils.insertOrSample(split_test.astype(np.int_), test.astype(np.float32))
+            _, test_feature = Utils.insertOrSample(split_test.astype(np.int_), test_pca.astype(np.float32))
             _, test_lms3d = Utils.insertOrSample(split_test.astype(np.int_), lms3d_test.astype(np.float32).reshape(-1, 204))
             # 解锁注释查看point clouds
             # for i in range(test_lms3d.shape[0]):
@@ -1077,6 +1067,59 @@ class Dataprocess():
         # dlib bounding box
         # dlib landmarks
         # dlib landmarks patch
+
+    @classmethod
+    def pretrainDataProcess(cls):
+        import tqdm
+        ''' 1.3dlms and alignment
+            2.rgb feature'''
+
+        train_lst = []
+        split_train = []
+        videos_pth = '/home/exp-10086/Project/ferdataset/processed/'
+        videos = os.listdir(videos_pth)
+        t = Models(False)
+        for vis in videos: # 开心01.mp4,开心02.mp4,...
+            video_pth = os.path.join(videos_pth,vis)
+            fragments = os.listdir(video_pth)
+            for frag in fragments: # 0,1,2,...
+                train_lst.clear()
+                split_train.clear()
+                frag_pth = os.path.join(video_pth,frag)
+                video_list = os.listdir(frag_pth)
+                video_list.sort(key=lambda x:int(x[:-4]))
+                split_train.append(len(video_list))
+                for v in video_list:
+                    train_lst.append((os.path.join(video_pth,frag,v),9,len(video_list)))
+                # sPC = Utils.standardPC(t)  # standard PointCloud
+                # random_idx = random.sample([i for i in range(config['PC_points_sample_range'])], config['PC_points_piars'])
+                # alphi_lst = []
+                # fi_lst = []
+                for pth, label_, fms_number in tqdm.tqdm(train_lst):
+                    try:
+                        fi, alphi, ver_lst, np_label, pc = Utils.deep_features(pth, label_, t, 'fan')
+                    except Exception:
+                        continue
+                    # fi_lst.append(fi)  # deep feature
+                    # alphi_lst.append(alphi)  # alpha i
+                    # standard_idx = sPC[random_idx]
+                    # standard_distance = np.linalg.norm(standard_idx[:int(config['PC_points_piars'] / 2)] - standard_idx[int(config['PC_points_piars'] / 2):],
+                    #     axis=1)
+                    # vari_idx = pc[random_idx]
+                    # vari_distance = np.linalg.norm(vari_idx[:int(config['PC_points_piars'] / 2)] - vari_idx[int(config['PC_points_piars'] / 2):], axis=1)
+                    # rates = standard_distance / vari_distance
+                    # rate = np.median(rates)  # scale value between new pc and standard pc
+                    # ver_lst[0] *= rate
+                    # pc *= rate
+                    # r, Tt = Utils.solveICPBySVD(p0=sPC, p1=pc)
+                    # newlms = r @ ver_lst[0] + Tt
+                    # lms pc standardPC 都在一起
+                    # Utils.open3dVerify(newlms,newpc.T,sPC)
+                    with open(f'/home/exp-10086/Project/mae-main/dataset/train_{vis[:-4]}_{frag}_feature.txt', 'ab') as n3d:
+                        np.savetxt(n3d, fi.cpu().numpy())
+                    # with open(f'./dataset/label_fold{test_fold}_train.txt', 'ab') as nl:
+                    #     np.savetxt(nl, np_label)
+                # Utils.aggregateFeaAndCode(fi_lst, alphi_lst, split_train, 0, 'train')
 if __name__ == '__main__':
     # 删除所有.DS_Store文件
     # Dataprocess.deleleDS_Store()
@@ -1122,5 +1165,7 @@ if __name__ == '__main__':
     # save face images
     # Dataprocess.saveFacePicture()
     # 68 lms2d
-    Dataprocess.rgbPatchFea()
+    # Dataprocess.rgbPatchFea()
+    Dataprocess.pretrainDataProcess()
+
     pass

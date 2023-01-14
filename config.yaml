@@ -68,10 +68,10 @@ LSTM_cell: 'LSTM'
 T_lms3d_dim: 204
 T_rgb_dim: 512
 T_pro_dim: 256
-T_input_dim: 2048
+T_input_dim: 340
 T_block_num: 6
 T_head_num: 8
-T_proj_dim: 2048
+T_proj_dim: 512
 T_forward_dim: 2048
 T_masked: True
 T_activation: 'gelu'
@@ -97,14 +97,14 @@ ViLT_output_dim: 7
 ViLT_bs_first: True
 # model config
 use_cuda: True
-batch_size: 8
-learning_rate: 1e-6
-epoch: 5000
+batch_size: 64
+learning_rate: 1e-3
+epoch: 2000
 fast_fold: [1,5,9]
-test_fold: 5
-checkpoint_pth: 'E:/ViT'
+test_fold: 10
+checkpoint_pth: '/home/exp-10086/Project/Data/ViT/'
 # data Post process config
 vote: False
 # log information config
-LOG_CHECK: '!!!ViT: 3dlms + rgb, 56 test fold, MLP[cls], 8 head, learnable PE, gelu, 5000 epoch, 6 block, 2048 forward dim, 2048 input embedding, 10 ws, 8 bs, masked, shuffle True !!!'
-LOG_pth: 'train.log'
+LOG_CHECK: '!!! vit: 3dlms+rgb, latent vector 512, bs 64, lr 1e-3, epoch 500, proj dim 512, adamW, normal lms'
+LOG_pth: 'train1.log'
