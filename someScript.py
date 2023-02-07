@@ -1,3 +1,4 @@
+import os
 import random
 
 import cv2
@@ -401,6 +402,54 @@ def observeData():
     # rgb0 = (rgb0 - meanr)/stdr
     print(lms0)
     print(rgb0)
+
+def get_current_lr(optimizer, group_idx, parameter_idx):
+    # Adam has different learning rates for each paramter. So we need to pick the
+    # group and paramter first.
+    group = optimizer.param_groups[group_idx]
+    p = group['params'][parameter_idx]
+
+    beta1, _ = group['betas']
+    state = optimizer.state[p]
+
+    bias_correction1 = 1 - beta1 ** state['step']
+    current_lr = group['lr'] / bias_correction1
+    return current_lr
+
+def getlr():
+    import torch
+    import timm.optim.optim_factory as optim_factory
+    from model import MAEEncoder
+    trans = MAEEncoder(embed_dim=512, depth=6, num_heads=8)
+    trans.train()
+    trans.cuda()
+    param_groups = optim_factory.add_weight_decay(trans, 0.05)
+    optimizer = torch.optim.Adam(param_groups, lr=1e-3, betas=(0.9, 0.95))
+    mockinput = torch.rand((64,10,340)).cuda()
+    loss_func = torch.nn.CrossEntropyLoss()
+    target = torch.zeros((64,)).cuda()
+    for e in range(2000):
+        print(optimizer.state_dict()['param_groups'][0]['lr'])
+        for itt in range(460):
+            optimizer.zero_grad()
+            pred = trans(mockinput)
+            loss = loss_func(pred, target.long())
+            loss.backward()
+            optimizer.step()
+            print(get_current_lr(optimizer,0,0))
+def deletepth():
+    import tqdm
+    for i in tqdm.tqdm(range(1,11)):
+        for e in tqdm.tqdm(range(2000,4000)):
+            os.remove(f'/home/exp-10086/Project/Data/ViT/{i}test_{e}.pkl')
+def testnpeinsum():
+    a = np.einsum('i, j->ij',np.zeros((2,)),np.zeros((3,)))
+    print(a)
+def testnumpyinsert():
+    a = np.arange(16).reshape(4,4)
+    b = np.eye(4)
+    c = list(zip(a,b))
+    print(np.array(c).reshape(-1,4))
 if __name__ == '__main__':
-    observeData()
+    testnumpyinsert()
     pass

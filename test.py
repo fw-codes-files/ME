@@ -1,11 +1,11 @@
 import os
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 import torch.nn
 
 import dataProcess
 import logging
 from torch.utils.tensorboard import SummaryWriter
-
 
 class Modeltest(object):
     softmax = torch.nn.Softmax(dim=1)
@@ -229,16 +229,16 @@ class Modeltest(object):
         trans.eval()
         acc_hat = 0
         writer_acc_val = SummaryWriter(f'./tb/acc/test4pick/pretrain/')
-        for cp in range(500): # 1test_0.pkl 2test_0.pkl ...
+        for cp in range(1998,4000): # 1test_0.pkl 2test_0.pkl ...
             if type(fold) is list:
                 score10,total10,vote_acc10 = 0,0,0
                 for fo in fold:
                     checkpoint = torch.load(os.path.join(config['checkpoint_pth'], f'{fo}test_{cp}.pkl'))
                     trans.load_state_dict(checkpoint['state_dict'])
-                    label_val, feature_val, lms3d_val, seqs_val = Dataprocess.loadSingleFold(fo, True)
-                    val_dataloader = Dataprocess.ConvertVideo2Samples(config['window_size'], feature_val, lms3d_val, label_val, True)  # variables in memory
+                    label_val, feature_val, lms3d_val, seqs_val, pos_encode_val = Dataprocess.loadSingleFold(fo, True, True)
+                    val_dataloader = Dataprocess.ConvertVideo2SamlpesConstantSpeed(config['window_size'], feature_val, lms3d_val, label_val, True, pos_embed=pos_encode_val)
                     pred_lst, label_lst, belong_lst = [], [], []
-                    for input, target, attribution in val_dataloader:
+                    for input, target, attribution, pe in val_dataloader:
                         label_lst.append(target)
                         with torch.no_grad():
                             pred = trans(input)

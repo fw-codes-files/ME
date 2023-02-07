@@ -103,8 +103,9 @@ epoch: 2000
 fast_fold: [1,5,9]
 test_fold: 10
 checkpoint_pth: '/home/exp-10086/Project/Data/ViT/'
+cuda_idx: '1'
 # data Post process config
 vote: False
 # log information config
-LOG_CHECK: '!!! vit: 3dlms+rgb, latent vector 512, bs 64, lr 1e-3, epoch 500, proj dim 512, adamW, normal lms'
-LOG_pth: 'train1.log'
+LOG_CHECK: '!!!train: vit: 3dlms+rgb, latent vector 512, bs 64, lr 1e-3, epoch 500, proj dim 512, adamW, normal lms, go on'
+LOG_pth: 'train.log'

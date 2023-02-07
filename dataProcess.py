@@ -1,9 +1,13 @@
 import random
+import time
+
 import numpy as np
 import cv2
 import os
-from itertools import chain
 import yaml
+config = yaml.safe_load(open('./config.yaml'))
+os.environ['CUDA_VISIBLE_DEVICES'] = config['cuda_idx']
+from itertools import chain
 import pdb
 from container import Models
 import torch
@@ -16,12 +20,12 @@ import joblib
 ##################
 target = np.array([[16, 12], [31, 12]])  # eye position in 2d image, for now, fer2013 dataset which image size is 48*48
 target_fan = np.array([[75, 68], [150, 68]])  # like previous line , just image size is 224*224
-config = yaml.safe_load(open('./config.yaml'))
-EOS = np.zeros((1, config['T_input_dim']))  # padding of origin 3d lms data sequence
+EOS = np.zeros((1, config['T_proj_dim']))  # padding of origin 3d lms data sequence
 AE_EOS = np.zeros((1, config['AE_mid_dim']))  # padding of AE mid feature sequence
+PE_EOS = np.zeros((1, config['T_input_dim']))
 standardImg = cv2.imread('./img.png')  # used to through 3DDFA net, then pointcloud produced by this picture will be a standard face pose. All face pose will be aligned to this face's pointcloud pose
 softmax = torch.nn.Softmax(dim=1)
-p_m = joblib.load('/home/exp-10086/Project/mae-main/util/pca.m')
+p_m = joblib.load('/home/flyinghu/ProjectSSD/ME/weights/pca.m')
 
 
 class LSTMDataSet(data.Dataset):
@@ -29,15 +33,22 @@ class LSTMDataSet(data.Dataset):
         this class has no problem, just convert data to dataset
     '''
 
-    def __init__(self, label, concat_features, video_indexes = None):
+    def __init__(self, label, concat_features, video_indexes = None, pos_embed = None):
         self.target = label
         self.input = concat_features
         self.vidx = None
+        self.ps = pos_embed
         if video_indexes is not None:
             self.vidx = video_indexes
+        if pos_embed is not None:
+            self.ps = pos_embed
     def __getitem__(self, idx):
-        if self.vidx is not None:
+        if self.vidx is not None and self.ps is None:
             return self.input[idx], self.target[idx], self.vidx[idx]
+        elif self.ps is not None and self.vidx is None:
+            return self.input[idx], self.target[idx], self.ps[idx]
+        elif (self.ps is not None) and (self.vidx is not None):
+            return self.input[idx], self.target[idx], self.vidx[idx], self.ps[idx]
         else:
             return self.input[idx], self.target[idx]
     def __len__(self):
@@ -238,7 +249,7 @@ class Utils():
         '''
         new_data = np.zeros((0, ori_data.shape[1]))
         sample_range = ori_data.shape[0]
-        sam_idx = sorted(random.sample([S for S in range(sample_range)], config['Max_frame']))
+        sam_idx = sorted(random.sample([S for S in range(sample_range)], config['Max_frame'] - 3))
         for s in sam_idx:
             new_data = np.concatenate((new_data, ori_data[s].reshape(1, -1)), axis=0).astype(np.float32)
         return new_data
@@ -258,8 +269,8 @@ class Utils():
         new_data_lst = []
         for s in range(split.shape[0]):
             if split[s] < config['Least_frame']:
-                # 插值，小于15帧的都拉长放在new_data_lst
-                new_spilt.append(config['Least_frame'])  # 必定是15
+                # 插值，小于Least_frame帧的都拉长放在new_data_lst
+                new_spilt.append(config['Least_frame'])  # 必定是Least_frame
                 ori_data = data_np[start_idx:start_idx + int(split[s])].copy()
                 new_data_lst.append(Utils.insertMethod(ori_data, config['Least_frame'] - split[s]))
                 start_idx += int(split[s])
@@ -273,6 +284,78 @@ class Utils():
                 ori_data = data_np[start_idx:start_idx + int(split[s])].copy()
                 new_data_lst.append(Utils.sampleMethod(ori_data))
                 start_idx += int(split[s])
+        return np.array(new_spilt, dtype=object), np.array(new_data_lst, dtype=object)
+
+    @classmethod
+    def insertOrSampleWOPeak(cls, split: np, data_np: np):
+        '''
+        args：
+            spilt: 一个视频原有的帧数 ex:np (294,)
+            data_lst: 数据集，利用spilt划分 ex:label:(5231,) feature:(5231,512) lms3d:(5231,204)
+        return：
+            new_spilt: 插值或者采样得到的新帧数list
+            new_data_lst: 插值或者采样得到的新数据集
+        '''
+        start_idx = 0
+        new_spilt = []
+        new_data_lst = []
+        for s in range(split.shape[0]):
+            if split[s] < config['Least_frame']:
+                # 插值，小于Least_frame帧的都拉长放在new_data_lst
+                new_spilt.append(config['Least_frame'])  # 必定是Least_frame
+                ori_data = data_np[start_idx:start_idx + int(split[s])].copy()
+                inserted = Utils.insertMethod(ori_data[:-3], config['Least_frame'] - split[s] + 3)
+                fixed_peak = np.concatenate((inserted,ori_data[-3:]),axis=0)
+                new_data_lst.append(fixed_peak)
+                start_idx += int(split[s])
+            elif config['Least_frame'] <= split[s] <= config['Max_frame']:
+                new_spilt.append(split[s])
+                new_data_lst.append(data_np[start_idx:start_idx + int(split[s])])
+                start_idx += int(split[s])
+            else:
+                # 采样,大于40帧的都隔n帧放在new_data_lst
+                new_spilt.append(config['Max_frame'])
+                ori_data = data_np[start_idx:start_idx + int(split[s])].copy()
+                sampled = Utils.sampleMethod(ori_data[:-3])
+                fixed_peak = np.concatenate((sampled,ori_data[-3:]),axis=0)
+                new_data_lst.append(fixed_peak)
+                start_idx += int(split[s])
+        return np.array(new_spilt, dtype=object), np.array(new_data_lst, dtype=object)
+
+    @classmethod
+    def atomicityInsert(cls, ori_data):
+        new_data = np.zeros((0, ori_data.shape[1]))
+        # cpoy0 = int(config['Least_frame'] // ori_data.shape[0])
+        cpoy0 = 3
+        integration = np.tile(ori_data, (cpoy0, 1))
+        for i in range(ori_data.shape[0]):
+            for cp in range(cpoy0):
+                new_data = np.concatenate((new_data, integration[i + ori_data.shape[0] * cp].reshape(1, -1)), axis=0)
+        return new_data
+
+    @classmethod
+    def inserCompeletely(cls, split: np, data_np: np):
+        '''
+        不会再进行采样，只进行插值操作,且插值的视频具有原子性。all videos shorter than 20 frames will be atomicity inserted
+        args:
+            split: videos length
+            data: lms+rgb
+        '''
+        start_idx = 0
+        new_spilt = []
+        new_data_lst = []
+        for s in range(split.shape[0]):
+            # if split[s] < config['Least_frame']:
+            # 插值，小于least frame帧的都拉长放在new_data_lst
+            ori_data = data_np[start_idx:start_idx + int(split[s])].copy()
+            inserted = Utils.atomicityInsert(ori_data)
+            new_data_lst.append(inserted)
+            new_spilt.append(inserted.shape[0])
+            start_idx += int(split[s])
+            # else:
+            #     new_spilt.append(split[s])
+            #     new_data_lst.append(data_np[start_idx:start_idx + int(split[s])])
+            #     start_idx += int(split[s])
         return np.array(new_spilt, dtype=object), np.array(new_data_lst, dtype=object)
 
     @classmethod
@@ -840,7 +923,7 @@ class Dataprocess():
         return sp_train_feature, sp_test_feature
 
     @classmethod
-    def loadSingleFold(cls, fold, crop):
+    def loadSingleFold(cls, fold, crop, peak_frame=False):
         # import open3d as o3d
         # pcd = o3d.geometry.PointCloud()
         # vis = o3d.visualization.Visualizer()
@@ -851,14 +934,20 @@ class Dataprocess():
         # opt.show_coordinate_frame = True
 
         label_test = np.loadtxt(f'./dataset/label_fold{fold}_test.txt').reshape(-1, 1)
-        test = np.loadtxt(f'./dataset/feature{fold}.txt')
-        test_pca = p_m.transform(test) # pca decomposition
+        test = np.loadtxt(f'./dataset/ft_feature{fold}.txt')
+        test_pca = p_m.transform(test)  # pca decomposition
         lms3d_test = np.loadtxt(f'./dataset/3dlms_fold{fold}_test.txt')
         split_test = np.loadtxt(f'./dataset/split_{fold}_test.txt')
         if crop:
-            test_seqs, test_l = Utils.insertOrSample(split_test.astype(np.int_), label_test.astype(np.float32))
-            _, test_feature = Utils.insertOrSample(split_test.astype(np.int_), test_pca.astype(np.float32))
-            _, test_lms3d = Utils.insertOrSample(split_test.astype(np.int_), lms3d_test.astype(np.float32).reshape(-1, 204))
+            test_seqs, test_l = Utils.inserCompeletely(split_test.astype(np.int_), label_test.astype(np.float32))
+            _, test_feature = Utils.inserCompeletely(split_test.astype(np.int_), test.astype(np.float32))
+            _, test_lms3d = Utils.inserCompeletely(split_test.astype(np.int_), lms3d_test.astype(np.float32).reshape(-1, 204))
+            if peak_frame:
+                pos_embed_lst = []
+                for t_f in test_feature:
+                    pos_embed_lst.append(Utils.SinusoidalEncoding(t_f.shape[0], config['T_input_dim'])[::-1,
+                                         :])  # 1 offset means except cls token position
+                return test_l, test_feature, test_lms3d, test_seqs, np.array(pos_embed_lst, dtype=object)
             # 解锁注释查看point clouds
             # for i in range(test_lms3d.shape[0]):
             #     for s in range(test_lms3d[i].shape[0]):
@@ -988,13 +1077,14 @@ class Dataprocess():
             # f_std = np.std(feature[f][:,:512], axis=1)
             # feature[f][:,:512] = (feature[f][:,:512] - f_mean.reshape(-1, 1)) / f_std.reshape(-1, 1)
 
-            # l_mean = np.mean(lms3d[f], axis=1)
-            # l_std = np.std(lms3d[f], axis=1)
-            # lms3d[f] = (lms3d[f] - l_mean.reshape(-1, 1)) / l_std.reshape(-1, 1)
+            l_mean = np.mean(lms3d[f], axis=1)
+            l_std = np.std(lms3d[f], axis=1)
+            lms3d[f] = (lms3d[f] - l_mean.reshape(-1, 1)) / l_std.reshape(-1, 1)
 
             # concatnate and align to ws -- video level
             # ori_video = np.hstack((feature[f][:,:512], lms3d[f]))
-            ori_video = lms3d[f]
+            ori_video = np.hstack((lms3d[f], feature[f][:,:512]))
+            # ori_video = lms3d[f]
             if ori_video.shape[0] < ws:
                 # EOS
                 EOS_num = ws - ori_video.shape[0]
@@ -1012,11 +1102,12 @@ class Dataprocess():
                 for i in range(config['standBy']):
                     v_fs_shuffle = v_fs.copy()  # a cpoy for shuffle
                     iind = random.sample([xx for xx in range(ori_video.shape[0] // 2)], 1)
-                    temp = v_fs_shuffle[iind[0]:min(ori_video.shape[0] // 5 * 3 + iind[0], ori_video.shape[0])].copy()
+                    temp = v_fs_shuffle[iind[0]:min(ori_video.shape[0] // 5 * 3 + iind[0], ori_video.shape[0]-3)].copy()
                     np.random.shuffle(temp)  # every standby sample will be generated from origin video shuffled again (frames,)
-                    v_fs_shuffle[iind[0]:min(ori_video.shape[0] // 5 * 3 + iind[0], ori_video.shape[0])] = temp.copy()
+                    v_fs_shuffle[iind[0]:min(ori_video.shape[0] // 5 * 3 + iind[0], ori_video.shape[0]-3)] = temp.copy()
                     v_ix_copy = v_ix.copy()  # index copy
-                    v_ix_copy[v_fs_shuffle[iind[0]:config['window_size'] + iind[0]]] = 1  # code in inner bracket means a slicing operation on variable v_fs_shuffle, code in outer bracket means a mask operation.
+                    v_ix_copy[v_fs_shuffle[iind[0]:config['window_size'] + iind[0]-3]] = 1  # code in inner bracket means a slicing operation on variable v_fs_shuffle, code in outer bracket means a mask operation.
+                    v_ix_copy[-3:]=1
                     redundancy_matrix[i] = v_fs[v_ix_copy.astype(int).astype(bool)]  # assignment
                 span = (redundancy_matrix.max(axis=1) - redundancy_matrix.min(axis=1))>= ori_video.shape[0]//2*1 # calulate the span of every standby sample, greater than some value will be selected as input sequence
                 if np.sum(span!=0)>=config['selected']: # number of qualified sample might be greater than we want, so if true, just select top 20 samples.
@@ -1034,9 +1125,92 @@ class Dataprocess():
                                   torch.from_numpy(np.array(data, dtype=np.float32)),
                                   torch.from_numpy(np.array(samples_counter_lst, dtype=np.float32)))
         else:
-            dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)),
-                                  torch.from_numpy(np.array(data, dtype=np.float32)))
-        return dataset
+            dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)).cuda(),
+                                  torch.from_numpy(np.array(data, dtype=np.float32)).cuda())
+        dataloader = torch.utils.data.DataLoader(dataset, shuffle=config['Shuffle'], batch_size=config['batch_size'])
+        return dataloader
+
+    @classmethod
+    def ConvertVideo2SamlpesConstantSpeed(cls, ws, feature, lms3d, label, vote: bool = True, pos_embed=None):
+        '''
+            args:
+                ws: window size, also known as sequence length
+                feature: deep feature from imgages
+                lms3d: 3D landmarks
+                label: target data
+                vote: count voting
+                pos_embed: origin video's frames's cosine-sine position embedding, peak frame's position is fixed.
+            return:
+                dataloader
+        '''
+        data = []
+        target = []
+        samples_counter_lst = []
+        pos_embeds = []
+        for f in range(0, feature.shape[0]):  # video level
+            import open3d as o3d
+            pcd = o3d.geometry.PointCloud()
+            # f_mean = np.mean(feature[f][:,:512], axis=1)
+            # f_std = np.std(feature[f][:,:512], axis=1)
+            # feature[f][:,:512] = (feature[f][:,:512] - f_mean.reshape(-1, 1)) / f_std.reshape(-1, 1)
+
+            l_mean = np.mean(lms3d[f], axis=1)
+            l_std = np.std(lms3d[f], axis=1)
+            lms3d[f] = (lms3d[f] - l_mean.reshape(-1, 1)) / l_std.reshape(-1, 1)
+
+            # concatnate and align to ws -- video level
+            # ori_video = np.hstack((feature[f][:,:512], lms3d[f]))
+            ori_video = np.hstack((lms3d[f], feature[f][:, :512]))  # 340
+            # ori_video = lms3d[f]
+            samples_idx = Utils.ConstantSpeed(ori_video.shape[0])  # (sample num, length）
+            for w in range(samples_idx.shape[0]):
+                v_s = ori_video[samples_idx[w]]  # 采样的样本
+                if v_s.shape[0] < ws:
+                    EOS_num = ws - v_s.shape[0]
+                    blanks = np.tile(EOS, (EOS_num, 1))
+                    processed_v_s = np.concatenate((v_s, blanks), axis=0)
+                else:
+                    processed_v_s = v_s.copy()
+                if w == 2:
+                    for pttth in range(6):
+                        pcd.points = o3d.utility.Vector3dVector(v_s[pttth][:204].copy().reshape((68, 3)))
+                        pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
+                        o3d.visualization.draw_geometries([pcd])
+                data.append(processed_v_s)
+                target.append(label[f][0][0].astype(np.long))
+                if vote:
+                    samples_counter_lst.append(f)
+                if pos_embed is not None:
+                    pe_p = pos_embed[f][samples_idx[w]]
+                    if pe_p.shape[0] < ws:
+                        EOS_num = ws - pe_p.shape[0]
+                        blanks = np.tile(PE_EOS, (EOS_num, 1))
+                        processed_pe = np.concatenate((pe_p, blanks), axis=0)
+                    else:
+                        processed_pe = pe_p.copy()
+                    pos_embeds.append(processed_pe)
+        # dataset and dataloader !!! x,y 是必须的，有无voting和有无fixed peak frame position变成了4个情况。
+        if vote:  # 用于test
+            if pos_embed is not None:  # 用于peak frame fixed position encoding
+                dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)).cuda(),
+                                      torch.from_numpy(np.array(data, dtype=np.float32)).cuda(),
+                                      torch.from_numpy(np.array(samples_counter_lst, dtype=np.float32)).cuda(),
+                                      torch.from_numpy(np.array(pos_embeds, dtype=np.float32)).cuda())
+            else:
+                dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)).cuda(),
+                                      torch.from_numpy(np.array(data, dtype=np.float32)).cuda(),
+                                      torch.from_numpy(np.array(samples_counter_lst, dtype=np.float32)).cuda())
+        else:
+            if pos_embed is not None:
+                dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)).cuda(),
+                                      torch.from_numpy(np.array(data, dtype=np.float32)).cuda(),
+                                      None,
+                                      torch.from_numpy(np.array(pos_embeds, dtype=np.float32)).cuda())
+            else:
+                dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)).cuda(),
+                                      torch.from_numpy(np.array(data, dtype=np.float32)).cuda())
+        dataloader = torch.utils.data.DataLoader(dataset, shuffle=config['Shuffle'], batch_size=config['batch_size'])
+        return dataloader
 
     @classmethod
     def rgbPatchFea(cls):

@@ -1,6 +1,8 @@
 '''
 Neural Network models, implemented by PyTorch
 '''
+import numpy as np
+import timm.models.vision_transformer
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -550,3 +552,70 @@ class MAEEncoder(nn.Module):
             x = blk(x)
         return self.pred(x[:,0,:])
 
+
+class NormalB16ViT(timm.models.vision_transformer.VisionTransformer):
+    def __init__(self,weights):
+        super().__init__()
+        if weights is not None:
+            self.load_from(weights)
+        else:
+            pass
+        self.emb_proj = nn.Linear(config['T_proj_dim'],self.embed_dim) # 340->768
+        self.pos_embed_my = nn.Parameter(torch.zeros(1, config['window_size']+1, self.embed_dim))
+        self.pos_embed_my.data.copy_(self.pos_embed[:,:config['window_size']+1,:]) # cut position embedding
+        self.pred = nn.Linear(self.embed_dim,config['T_output_dim'])
+        pass
+
+    @torch.no_grad()
+    def load_from(self, weights):
+        def _n2p(w, t=True):
+            if w.ndim == 4 and w.shape[0] == w.shape[1] == w.shape[2] == 1:
+                w = w.flatten()
+            if t:
+                if w.ndim == 4:
+                    w = w.transpose([3, 2, 0, 1])
+                elif w.ndim == 3:
+                    w = w.transpose([2, 0, 1])
+                elif w.ndim == 2:
+                    w = w.transpose([1, 0])
+            return torch.from_numpy(w)
+        self.pos_embed.data.copy_(torch.from_numpy(weights['Transformer/posembed_input/pos_embedding']))
+        self.cls_token.data.copy_(torch.from_numpy(weights['cls']))
+        for l,b in enumerate(self.blocks):
+            ################ln weight######################
+            b.norm1.bias.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/LayerNorm_0/bias']))
+            b.norm1.weight.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/LayerNorm_0/scale']))
+            b.norm2.bias.data.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/LayerNorm_2/bias']))
+            b.norm2.weight.data.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/LayerNorm_2/scale']))
+            ###############mlp weight######################
+            b.mlp.fc1.weight.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/MlpBlock_3/Dense_0/kernel']).t())
+            b.mlp.fc1.bias.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/MlpBlock_3/Dense_0/bias']).t())
+            b.mlp.fc2.weight.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/MlpBlock_3/Dense_1/kernel']).t())
+            b.mlp.fc2.bias.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/MlpBlock_3/Dense_1/bias']).t())
+            ###############attention weight################
+            b.attn.qkv.weight.copy_(torch.cat([_n2p(weights[f'Transformer/encoderblock_{l}/MultiHeadDotProductAttention_1/{n}/kernel'], t=False).flatten(1).T for n in ('query', 'key', 'value')]))
+            b.attn.qkv.bias.copy_(torch.cat([_n2p(weights[f'Transformer/encoderblock_{l}/MultiHeadDotProductAttention_1/{n}/bias'], t=False).reshape(-1) for n in ('query', 'key', 'value')]))
+            b.attn.proj.weight.copy_(_n2p(weights[f'Transformer/encoderblock_{l}/MultiHeadDotProductAttention_1/out/kernel']).flatten(1))
+            b.attn.proj.bias.copy_(_n2p(weights[f'Transformer/encoderblock_{l}/MultiHeadDotProductAttention_1/out/bias']))
+    @torch.no_grad()
+    def SinusoidalEncoding(self, seq_len, d_model):
+        pos_table = np.array([
+            [pos / np.power(10000, 2 * i / d_model) for i in range(d_model)]
+            for pos in range(seq_len)])
+        pos_table[0, 0::2] = np.sin(pos_table[0, 0::2])
+        pos_table[0, 1::2] = np.cos(pos_table[0, 1::2])
+        return torch.FloatTensor(pos_table)
+
+    def forward(self, x, position_embeddings=None):
+        x = self.emb_proj(x)
+        if position_embeddings is None:
+            x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x),dim=1) + self.pos_embed_my
+        else:
+            cls_token_pe = torch.tile(self.SinusoidalEncoding(1,self.embed_dim),(x.shape[0],1)).cuda()
+            x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1) + torch.concatenate((cls_token_pe[:,None,:], position_embeddings),dim=1)
+        #x(b,s,d)
+        x = self.norm_pre(x)
+        x = self.blocks(x)
+        x = self.norm(x)
+        pred = self.pred(x[:,0,:])
+        return pred
