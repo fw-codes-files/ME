@@ -214,7 +214,7 @@ class Modeltest(object):
 
     @classmethod
     def test4PickUpEpoch(cls, fold):
-        from model import MAEEncoder
+        from model import NormalB16ViT
         from train import config
         from dataProcess import Dataprocess
         import torch
@@ -224,24 +224,27 @@ class Modeltest(object):
                             filename=config['LOG_pth'],
                             filemode='a')
         # trans = MultiEmoTransformer(lms3dpro = config['T_lms3d_dim'], rgbpro = config['T_rgb_dim'], input=config['T_input_dim'], nhead=config['T_head_num'], num_layers=config['T_block_num'], batch_first=config['T_bs_first'], output_dim=config['T_output_dim'])
-        trans = MAEEncoder(embed_dim=config['T_proj_dim'], depth=config['T_block_num'], num_heads=config['T_head_num'])
+        trans = NormalB16ViT(weights=None)
         trans.cuda()
         trans.eval()
         acc_hat = 0
         writer_acc_val = SummaryWriter(f'./tb/acc/test4pick/pretrain/')
-        for cp in range(1998,4000): # 1test_0.pkl 2test_0.pkl ...
+        optimizer = torch.optim.AdamW(trans.parameters(), lr=1e-3, betas=(0.9, 0.95))
+        for cp in range(5,501,5): # 1test_0.pkl 2test_0.pkl ...
             if type(fold) is list:
                 score10,total10,vote_acc10 = 0,0,0
                 for fo in fold:
                     checkpoint = torch.load(os.path.join(config['checkpoint_pth'], f'{fo}test_{cp}.pkl'))
                     trans.load_state_dict(checkpoint['state_dict'])
-                    label_val, feature_val, lms3d_val, seqs_val, pos_encode_val = Dataprocess.loadSingleFold(fo, True, True)
-                    val_dataloader = Dataprocess.ConvertVideo2SamlpesConstantSpeed(config['window_size'], feature_val, lms3d_val, label_val, True, pos_embed=pos_encode_val)
+                    label_val, feature_val, pos_encode_val = Dataprocess.readAndLoadSingleFold(fo)
+                    val_dataloader = Dataprocess.ConvertVideo2SamlpesConstantSpeed(config['window_size'], feature_val, None, label_val, True, pos_embed=pos_encode_val)  # variables in memory
                     pred_lst, label_lst, belong_lst = [], [], []
                     for input, target, attribution, pe in val_dataloader:
                         label_lst.append(target)
+                        # with torch.no_grad():
+                        #     pred = trans(input)
                         with torch.no_grad():
-                            pred = trans(input)
+                            pred = trans(input,pe)
                         pred = cls.softmax(pred)
                         pred_lst.append(pred)
                         belong_lst.append(attribution)
@@ -261,7 +264,7 @@ class Modeltest(object):
                     trans.load_state_dict(checkpoint['state_dict'])
                     score5, total5 = 0, 0
                     label_val, feature_val, lms3d_val, seqs_val = Dataprocess.loadSingleFold(fold, True)
-                    val_dataloader = Dataprocess.ConvertVideo2Samples(config['window_size'], feature_val, lms3d_val, label_val,True) # variables in memory
+                    val_dataloader = Dataprocess.ConvertVideo2Samples100Votes(config['window_size'], feature_val, lms3d_val, label_val,True) # variables in memory
                     pred_lst,label_lst,belong_lst=[], [], []
                     for input, target, attribution in val_dataloader:
                         label_lst.append(target)
@@ -320,4 +323,4 @@ if __name__ == '__main__':
     # Modeltest.baselineVal(5)
     # Modeltest.baselineTest(1000, 5)
     folds = [i+1 for i in range(10)]
-    Modeltest.test4PickUpEpoch(folds)
+    Modeltest.test4PickUpEpoch(fold=folds)

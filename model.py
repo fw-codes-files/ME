@@ -512,7 +512,7 @@ class MultiEmoTransformer(nn.Module):
         v_feature = x_[:, 0, :]  # (bs,1,d_model)
         return self.pred(v_feature)
 
-from util.config import cfg
+from utils.config import cfg
 class MAEEncoder(nn.Module):
     def __init__(self, embed_dim=1024, depth=24, num_heads=16,
                  mlp_ratio=4., norm_layer=nn.LayerNorm, norm_pix_loss=False):

@@ -25,7 +25,7 @@ AE_EOS = np.zeros((1, config['AE_mid_dim']))  # padding of AE mid feature sequen
 PE_EOS = np.zeros((1, config['T_input_dim']))
 standardImg = cv2.imread('./img.png')  # used to through 3DDFA net, then pointcloud produced by this picture will be a standard face pose. All face pose will be aligned to this face's pointcloud pose
 softmax = torch.nn.Softmax(dim=1)
-p_m = joblib.load('/home/flyinghu/ProjectSSD/ME/weights/pca.m')
+p_m = joblib.load('/home/exp-10086/Project/ME/weights/pca.m')
 
 
 class LSTMDataSet(data.Dataset):
@@ -494,6 +494,49 @@ class Utils():
                 continue
             model.state_dict()[key] = static_dict[key]
         return model
+
+    @classmethod
+    def SinusoidalEncoding(cls, seq_len, d_model):
+        pos_table = np.array([
+            [pos / np.power(10000, 2 * i / d_model) for i in range(d_model)]
+            for pos in range(1, seq_len + 1)])
+        pos_table[:, 0::2] = np.sin(pos_table[:, 0::2])
+        pos_table[:, 1::2] = np.cos(pos_table[:, 1::2])
+        return pos_table.astype(np.float32)
+
+    @classmethod
+    def ConstantSpeed(cls, ori_video_len, window_size=[6, 6], span_lst=[0, 1, 2]):
+        '''按着空格数量来取得index,想要sample较多的样本，既然采样匀速，就可以从长度来进行。
+        1.视频长短不一，sequence length最大长度不可以超过max长度
+        2.单个视频为处理单元。'''
+        frameIndex_redundancy_matrix = np.zeros((0, ori_video_len))  # bool mat,used for indexing
+        for s in span_lst:
+            tem_sam_idx = ori_video_len - np.arange(ori_video_len) * (s + 1) - 1  # last frame obtained certainly
+            # sequence length <=30?? 如果在max以内，会出现负的索引。把正的索引号indexing到正确的索引位。
+            # eg.[5,3,1]->[1,0,1,0,1,0]
+            tem_sam_bool_idx = np.zeros((1, ori_video_len))
+            tem_sam_idx[tem_sam_idx < 0] = 0
+            tem_sam_bool_idx[:, tem_sam_idx] = 1  # 这一刻已经是正序了
+            if sum(tem_sam_bool_idx[0, :3]) != 3:  # 防止index0处的数值异常
+                tem_sam_bool_idx[0, 0] = 0
+            if sum(sum(tem_sam_bool_idx)) > window_size[1]:
+                for c in range(ori_video_len // 3):
+                    tem_sam_bool_idx[0, c * 3:(c + 1) * 3] = 0
+                    # if sum(sum(tem_sam_bool_idx))<window_size[0]:
+                    if sum(sum(tem_sam_bool_idx)) <= window_size[0]:
+                        frameIndex_redundancy_matrix = np.concatenate(
+                            (frameIndex_redundancy_matrix, tem_sam_bool_idx.reshape(1, -1)), axis=0)
+                        break
+                    else:
+                        if sum(sum(tem_sam_bool_idx)) > window_size[1]:
+                            continue
+                        else:
+                            frameIndex_redundancy_matrix = np.concatenate(
+                                (frameIndex_redundancy_matrix, tem_sam_bool_idx.reshape(1, -1)), axis=0)
+            else:
+                frameIndex_redundancy_matrix = np.concatenate(
+                    (frameIndex_redundancy_matrix, tem_sam_bool_idx.reshape(1, -1)), axis=0)
+        return frameIndex_redundancy_matrix.astype('bool')
 class Dataprocess():
     def __init__(self):
         pass
@@ -839,6 +882,87 @@ class Dataprocess():
         return dataloader
 
     @classmethod
+    def ConvertVideo2SamlpesConstantSpeed(cls, ws, feature, lms3d, label, vote: bool = True, pos_embed=None):
+        '''
+            args:
+                ws: window size, also known as sequence length
+                feature: deep feature from imgages
+                lms3d: 3D landmarks
+                label: target data
+                vote: count voting
+                pos_embed: origin video's frames's cosine-sine position embedding, peak frame's position is fixed.
+            return:
+                dataloader
+        '''
+        data = []
+        target = []
+        samples_counter_lst = []
+        pos_embeds = []
+        for f in range(0, feature.shape[0]):  # video level
+            import open3d as o3d
+            pcd = o3d.geometry.PointCloud()
+            # f_mean = np.mean(feature[f][:,:512], axis=1)
+            # f_std = np.std(feature[f][:,:512], axis=1)
+            # feature[f][:,:512] = (feature[f][:,:512] - f_mean.reshape(-1, 1)) / f_std.reshape(-1, 1)
+
+            # l_mean = np.mean(lms3d[f], axis=1)
+            # l_std = np.std(lms3d[f], axis=1)
+            # lms3d[f] = (lms3d[f] - l_mean.reshape(-1, 1)) / l_std.reshape(-1, 1)
+
+            # concatnate and align to ws -- video level
+            ori_video = feature[f]
+            # ori_video = np.hstack((lms3d[f], feature[f][:, :512]))  # 340
+            # ori_video = lms3d[f]
+            samples_idx = Utils.ConstantSpeed(ori_video.shape[0])  # (sample num, length）
+            for w in range(samples_idx.shape[0]):
+                v_s = ori_video[samples_idx[w]]  # 采样的样本
+                if v_s.shape[0] < ws:
+                    EOS_num = ws - v_s.shape[0]
+                    blanks = np.tile(EOS, (EOS_num, 1))
+                    processed_v_s = np.concatenate((v_s, blanks), axis=0)
+                else:
+                    processed_v_s = v_s.copy()
+                if w == 2:
+                    for pttth in range(6):
+                        pcd.points = o3d.utility.Vector3dVector(v_s[pttth][:204].copy().reshape((68, 3)))
+                        pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
+                        o3d.visualization.draw_geometries([pcd])
+                data.append(processed_v_s)
+                target.append(label[f][0][0].astype(np.long))
+                if vote:
+                    samples_counter_lst.append(f)
+                if pos_embed is not None:
+                    pe_p = pos_embed[f][samples_idx[w]]
+                    if pe_p.shape[0] < ws:
+                        EOS_num = ws - pe_p.shape[0]
+                        blanks = np.tile(PE_EOS, (EOS_num, 1))
+                        processed_pe = np.concatenate((pe_p, blanks), axis=0)
+                    else:
+                        processed_pe = pe_p.copy()
+                    pos_embeds.append(processed_pe)
+        # dataset and dataloader !!! x,y 是必须的，有无voting和有无fixed peak frame position变成了4个情况。
+        if vote:  # 用于test
+            if pos_embed is not None:  # 用于peak frame fixed position encoding
+                dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)).cuda(),
+                                      torch.from_numpy(np.array(data, dtype=np.float32)).cuda(),
+                                      torch.from_numpy(np.array(samples_counter_lst, dtype=np.float32)).cuda(),
+                                      torch.from_numpy(np.array(pos_embeds, dtype=np.float32)).cuda())
+            else:
+                dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)).cuda(),
+                                      torch.from_numpy(np.array(data, dtype=np.float32)).cuda(),
+                                      torch.from_numpy(np.array(samples_counter_lst, dtype=np.float32)).cuda())
+        else:
+            if pos_embed is not None:
+                dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)).cuda(),
+                                      torch.from_numpy(np.array(data, dtype=np.float32)).cuda(),
+                                      None,
+                                      torch.from_numpy(np.array(pos_embeds, dtype=np.float32)).cuda())
+            else:
+                dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)).cuda(),
+                                      torch.from_numpy(np.array(data, dtype=np.float32)).cuda())
+        dataloader = torch.utils.data.DataLoader(dataset, shuffle=config['Shuffle'], batch_size=config['batch_size'])
+
+    @classmethod
     def AEinput(cls, path):
         '''
             load all CK+ dataset
@@ -945,8 +1069,7 @@ class Dataprocess():
             if peak_frame:
                 pos_embed_lst = []
                 for t_f in test_feature:
-                    pos_embed_lst.append(Utils.SinusoidalEncoding(t_f.shape[0], config['T_input_dim'])[::-1,
-                                         :])  # 1 offset means except cls token position
+                    pos_embed_lst.append(Utils.SinusoidalEncoding(t_f.shape[0], config['T_input_dim'])[::-1,:])  # 1 offset means except cls token position
                 return test_l, test_feature, test_lms3d, test_seqs, np.array(pos_embed_lst, dtype=object)
             # 解锁注释查看point clouds
             # for i in range(test_lms3d.shape[0]):
@@ -959,9 +1082,43 @@ class Dataprocess():
             #         vis.update_renderer()
             return test_l, test_feature, test_lms3d, test_seqs
         else:
-
             return label_test, test, lms3d_test, split_test
-
+    @classmethod
+    def readAndLoadSingleFold(cls, fold):
+        fold_root = '/home/exp-10086/Project/Emotion-FAN-master/data/txt/CK+_10-fold_sample_IDascendorder_step10.txt'
+        fold_fp = open(fold_root)
+        lines = fold_fp.readlines()
+        start = 0
+        for lidx, l in enumerate(lines):
+            if l.__contains__(f'{fold}-fold'):
+                vn = l.split(' ')[1]
+                start = lidx
+                break
+            else:
+                continue
+        fold_lines = lines[start+1:start+int(vn)+1]
+        pf_lst = []
+        for fl in fold_lines:
+            prefix = fl.split(' ')[0]
+            prefix = prefix.replace('/','_')
+            pf_lst.append(prefix)
+        AE_root = '/home/exp-10086/Project/ferdataset/CK_AE_CODE'
+        aes = os.listdir(AE_root)
+        aes.sort()
+        test = np.zeros((0,512))
+        split_test = np.loadtxt(f'./dataset/split_{fold}_test.txt')
+        for pf in pf_lst:
+            for a in aes:
+                if a.__contains__(pf):
+                    ae_feaure = np.loadtxt(os.path.join(AE_root, a))
+                    test = np.concatenate((test, ae_feaure.reshape(1,512)), axis=0)
+        _, test_feature = Utils.inserCompeletely(split_test.astype(np.int_), test.astype(np.float32))
+        pos_embed_lst = []
+        for t_f in test_feature:
+            pos_embed_lst.append(Utils.SinusoidalEncoding(t_f.shape[0], config['T_input_dim'])[::-1,:])  # 1 offset means except cls token position
+        label_test = np.loadtxt(f'./dataset/label_fold{fold}_test.txt').reshape(-1, 1)
+        _, test_l = Utils.inserCompeletely(split_test.astype(np.int_), label_test.astype(np.float32))
+        return test_l, test_feature, np.array(pos_embed_lst, dtype=object)
     @classmethod
     def saveFacePicture(cls):
         import tqdm
@@ -1148,19 +1305,19 @@ class Dataprocess():
         samples_counter_lst = []
         pos_embeds = []
         for f in range(0, feature.shape[0]):  # video level
-            import open3d as o3d
-            pcd = o3d.geometry.PointCloud()
+            # import open3d as o3d
+            # pcd = o3d.geometry.PointCloud()
             # f_mean = np.mean(feature[f][:,:512], axis=1)
             # f_std = np.std(feature[f][:,:512], axis=1)
             # feature[f][:,:512] = (feature[f][:,:512] - f_mean.reshape(-1, 1)) / f_std.reshape(-1, 1)
 
-            l_mean = np.mean(lms3d[f], axis=1)
-            l_std = np.std(lms3d[f], axis=1)
-            lms3d[f] = (lms3d[f] - l_mean.reshape(-1, 1)) / l_std.reshape(-1, 1)
+            # l_mean = np.mean(lms3d[f], axis=1)
+            # l_std = np.std(lms3d[f], axis=1)
+            # lms3d[f] = (lms3d[f] - l_mean.reshape(-1, 1)) / l_std.reshape(-1, 1)
 
             # concatnate and align to ws -- video level
-            # ori_video = np.hstack((feature[f][:,:512], lms3d[f]))
-            ori_video = np.hstack((lms3d[f], feature[f][:, :512]))  # 340
+            ori_video = feature[f]
+            # ori_video = np.hstack((lms3d[f], feature[f][:, :512]))  # 340
             # ori_video = lms3d[f]
             samples_idx = Utils.ConstantSpeed(ori_video.shape[0])  # (sample num, length）
             for w in range(samples_idx.shape[0]):
@@ -1171,11 +1328,11 @@ class Dataprocess():
                     processed_v_s = np.concatenate((v_s, blanks), axis=0)
                 else:
                     processed_v_s = v_s.copy()
-                if w == 2:
-                    for pttth in range(6):
-                        pcd.points = o3d.utility.Vector3dVector(v_s[pttth][:204].copy().reshape((68, 3)))
-                        pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
-                        o3d.visualization.draw_geometries([pcd])
+                # if w == 2:
+                #     for pttth in range(6):
+                #         pcd.points = o3d.utility.Vector3dVector(v_s[pttth][:204].copy().reshape((68, 3)))
+                #         pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
+                #         o3d.visualization.draw_geometries([pcd])
                 data.append(processed_v_s)
                 target.append(label[f][0][0].astype(np.long))
                 if vote:
@@ -1340,6 +1497,6 @@ if __name__ == '__main__':
     # Dataprocess.saveFacePicture()
     # 68 lms2d
     # Dataprocess.rgbPatchFea()
-    Dataprocess.pretrainDataProcess()
-
+    # Dataprocess.pretrainDataProcess()
+    Dataprocess.readAndLoadSingleFold(1, True)
     pass

@@ -43,8 +43,7 @@ class LSTM_model_traintest(object):
                 for sq in seqs:
                     f_mean = torch.mean(feature[start_idx:start_idx + int(sq)], dim=1)
                     f_std = torch.std(feature[start_idx:start_idx + int(sq)], dim=1)
-                    feature[start_idx:start_idx + int(sq)] = (feature[start_idx:start_idx + int(sq)] - f_mean.view(-1,
-                                                                                                                   1)) / f_std.view(
+                    feature[start_idx:start_idx + int(sq)] = (feature[start_idx:start_idx + int(sq)] - f_mean.view(-1,1)) / f_std.view(
                         -1, 1)
                     l_mean = torch.mean(lms3d[start_idx * 68:(start_idx + int(sq)) * 68], dim=1)
                     l_std = torch.std(lms3d[start_idx * 68:(start_idx + int(sq)) * 68], dim=1)
@@ -972,10 +971,68 @@ class Two_tsm_train():
                     torch.save(checkpoints, f'/media/flyinghu/DATA_03/ViT/{i}test_{e + 1}.pkl')
             logging.info(
                 f'------------------------------------train ends, train folds:{f_lst}-----------------------------------------------')
+
+    @classmethod
+    def B16Vit_AE(cls, epoch):
+        from model import NormalB16ViT
+        from torch.utils.tensorboard import SummaryWriter
+        from numpy import load
+        npz = load('./weights/imagenet21k_ViT-B_16.npz')
+        loss_func = torch.nn.CrossEntropyLoss()
+
+        for i in range(1, 11):
+            f_lst = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+            nv = NormalB16ViT(npz)
+            nv.cuda()
+            nv.train()
+            # optimizer = torch.optim.AdamW(nv.parameters(), lr=1e-3, betas=(0.9, 0.95))
+            optimizer = torch.optim.SGD(filter(lambda p: p.requires_grad, nv.parameters()), 1e-3, momentum=0.9, weight_decay=1e-4)
+            lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.2)
+            f_lst.remove(i)
+            # f_lst.remove(11 - config['test_fold'])
+            label,  feature, pos_embed = np.zeros((0,)), np.zeros((0,)), np.zeros((0,))
+            for c in f_lst:
+                train_label_c, train_feature_c, train_pos_embedd = Dataprocess.readAndLoadSingleFold(c)  # finetune之后的rgb特征
+                label = np.concatenate((label, train_label_c))
+                feature = np.concatenate((feature, train_feature_c))
+                pos_embed = np.concatenate((pos_embed, train_pos_embedd))
+            train_dataloader = Dataprocess.ConvertVideo2SamlpesConstantSpeed(config['window_size'], feature, None, label, False, pos_embed)
+            writer_loss = SummaryWriter(f'./tb/loss/B16_AE_dep1/{i}/')
+            writer_acc_train = SummaryWriter(f'./tb/acc/B16_AE_dep1/{i}/')
+            for e in range(epoch):
+                score, total = 0, 0
+                # checkpoint = torch.load(os.path.join(config['checkpoint_pth'], f'{i}test_200.pkl'))
+                # nv.load_state_dict(checkpoint['state_dict'])
+                # optimizer.load_state_dict(checkpoint['optim'])
+                for input, target, postion_embedding in train_dataloader:
+                    optimizer.zero_grad()
+                    pred = nv(input, postion_embedding)
+                    loss = loss_func(pred, target.long())
+                    loss.backward()
+                    optimizer.step()
+                    idx_pred = torch.topk(pred, 1, dim=1)[1]
+                    rs = idx_pred.eq(target.reshape(-1, 1))
+                    score += rs.view(-1).float().sum()
+                    total += input.shape[0]
+                lr_scheduler.step()
+                sacal_loss = loss.detach().cpu()
+                writer_loss.add_scalar(f'train loss', sacal_loss, e)
+                print(
+                    '\r' + f'fold {i} epoch:{e} loss:{loss} acc:{score / total * 100}% lr:{optimizer.param_groups[0]["lr"]}',
+                    end='', flush=True)
+                writer_acc_train.add_scalar('train acc', score / total * 100, e)
+                if (e + 1) % 5 == 0:
+                    checkpoints = {'model_type': 'ViT',
+                                   'epoch': e + 1,
+                                   'optim': optimizer.state_dict(),
+                                   'state_dict': nv.state_dict()}
+                    torch.save(checkpoints, f'/home/exp-10086/Project/ferdataset/ME_dep2_model/{i}test_{e + 1}.pkl')
+            logging.info(
+                f'------------------------------------train ends, train folds:{f_lst}-----------------------------------------------')
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='train function choice')
-    parser.add_argument('-M', default='B16', type=str, metavar='N',
+    parser.add_argument('-M', default='B16_AE', type=str, metavar='N',
                         help='s means single and m means minibatch')
     args = parser.parse_args()
     if args.M == 'single': # lstm train with bs=1
@@ -1008,5 +1065,7 @@ def main():
         Two_tsm_train.pre2train(config['epoch'])
     elif args.M == 'B16':
         Two_tsm_train.B16Vit(config['epoch'])
+    elif args.M == 'B16_AE':
+        Two_tsm_train.B16Vit_AE(config['epoch'])
 if __name__ == '__main__':
     main()
