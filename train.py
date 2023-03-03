@@ -307,7 +307,6 @@ class Transformer_traintest():
         logging.info('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
         logging.info(f'{len(f_lst)} folds average acc is {sum(acc_lst) / len(f_lst)}')
         logging.info('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
-        send('2070 train result',f'{config["LOG_CHECK"]} \t acc:{sum(acc_lst) / len(f_lst)}')
 
     @classmethod
     def trainBypackage(cls,fast, epoch):
@@ -483,7 +482,6 @@ class Transformer_traintest():
                            f'E:/ViT/{config["test_fold"]}test_{11 - config["test_fold"]}val_{time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())}.pkl')
         logging.info(
             f'------------------------------------train ends, train folds:1,2,3,4,7,8,9,10-----------------------------------------------')
-        send('2070 train result', f'{config["LOG_CHECK"]}')
 
     @classmethod
     def voteVit(cls,fast,epoch):
@@ -563,7 +561,6 @@ class Transformer_traintest():
         logging.info('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
         logging.info(f'{len(f_lst)} folds average acc is {sum(acc_lst) / len(f_lst)}')
         logging.info('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
-        send('2070 train result', f'{config["LOG_CHECK"]} \t acc:{sum(acc_lst) / len(f_lst)}')
 
     @classmethod
     def train8Folds4ValAndTest(cls, epoch):
@@ -619,7 +616,6 @@ class Transformer_traintest():
                                'state_dict': trans.state_dict()}
                 torch.save(checkpoints, f'/home/exp-10086/Project/Data/ViT/{config["test_fold"]}test_{11 - config["test_fold"]}val_{time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())}.pkl')
         logging.info(f'------------------------------------train ends, train folds:1,2,3,4,7,8,9,10-----------------------------------------------')
-        send('2070 train result', f'{config["LOG_CHECK"]}')
 
     @classmethod
     def linearVote(cls, epoch): # useless
@@ -683,7 +679,6 @@ class Transformer_traintest():
                            f'./{config["test_fold"]}test_{11 - config["test_fold"]}val_{time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())}.pkl')
             logging.info(
                 f'------------------------------------train ends, train folds:1,2,3,4,7,8,9,10-----------------------------------------------')
-        send('2070 train result', f'{config["LOG_CHECK"]}')
 
     @classmethod
     def baseline84(cls, epoch):
@@ -742,7 +737,6 @@ class Transformer_traintest():
                 torch.save(checkpoints,
                            f'E:/ViT/{config["test_fold"]}test_{11 - config["test_fold"]}val_{time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())}.pkl')
         logging.info(f'------------------------------------train ends, train folds:1,2,3,4,7,8,9,10-----------------------------------------------')
-        send('2070 train result', f'{config["LOG_CHECK"]}')
 class AutoEncoder():
     def __init__(self):
         pass
@@ -921,26 +915,20 @@ class Two_tsm_train():
             nv = NormalB16ViT(npz)
             nv.cuda()
             nv.train()
-            # optimizer = torch.optim.AdamW(nv.parameters(), lr=1e-3, betas=(0.9, 0.95))
-            optimizer = torch.optim.SGD(filter(lambda p: p.requires_grad, nv.parameters()), 1e-3, momentum=0.9,
-                                        weight_decay=1e-4)
-            lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.2)
+            optimizer = torch.optim.AdamW(nv.parameters(), lr=1e-3, betas=(0.9, 0.95))
             f_lst.remove(i)
             # f_lst.remove(11 - config['test_fold'])
-            label, lms3d, feature, seqs, pos_embed = np.zeros((0,)), np.zeros((0,)), np.zeros((0,)), np.zeros(
-                (0,)), np.zeros((0,))
+            label, lms3d, feature, seqs, pos_embed = np.zeros((0,)), np.zeros((0,)), np.zeros((0,)), np.zeros((0,)), np.zeros((0,))
             for c in f_lst:
-                train_label_c, train_feature_c, train_lms3d_c, train_seqs_c, train_pos_embedd = Dataprocess.loadSingleFold(
-                    c, True, True)  # finetune之后的rgb特征
+                train_label_c, train_feature_c, train_lms3d_c, train_seqs_c, train_pos_embedd = Dataprocess.loadSingleFold(c, True, True)  # finetune之后的rgb特征
                 label = np.concatenate((label, train_label_c))
                 lms3d = np.concatenate((lms3d, train_lms3d_c))
                 feature = np.concatenate((feature, train_feature_c))
                 seqs = np.concatenate((seqs, train_seqs_c))
                 pos_embed = np.concatenate((pos_embed, train_pos_embedd))
-            train_dataloader = Dataprocess.ConvertVideo2Samples100Votes(config['window_size'], feature, lms3d,
-                                                                        label, False, pos_embed)
-            writer_loss = SummaryWriter(f'./tb/loss/B16/{i}/')
-            writer_acc_train = SummaryWriter(f'./tb/acc/B16/{i}/')
+            train_dataloader = Dataprocess.ConvertVideo2SamlpesConstantSpeed(config['window_size'], feature, lms3d, label, False, pos_embed)
+            writer_loss = SummaryWriter(f'./tb/loss/B16_3dlms/{i}/')
+            writer_acc_train = SummaryWriter(f'./tb/acc/B16_3dlms/{i}/')
             for e in range(epoch):
                 score, total = 0, 0
                 # checkpoint = torch.load(os.path.join(config['checkpoint_pth'], f'{i}test_200.pkl'))
@@ -956,7 +944,6 @@ class Two_tsm_train():
                     rs = idx_pred.eq(target.reshape(-1, 1))
                     score += rs.view(-1).float().sum()
                     total += input.shape[0]
-                lr_scheduler.step()
                 sacal_loss = loss.detach().cpu()
                 writer_loss.add_scalar(f'train loss', sacal_loss, e)
                 print(
@@ -968,7 +955,7 @@ class Two_tsm_train():
                                    'epoch': e + 1,
                                    'optim': optimizer.state_dict(),
                                    'state_dict': nv.state_dict()}
-                    torch.save(checkpoints, f'/media/flyinghu/DATA_03/ViT/{i}test_{e + 1}.pkl')
+                    torch.save(checkpoints, f'/home/exp-10086/Project/ferdataset/ME_3dlms/{i}test_{e + 1}.pkl')
             logging.info(
                 f'------------------------------------train ends, train folds:{f_lst}-----------------------------------------------')
 
@@ -985,20 +972,19 @@ class Two_tsm_train():
             nv = NormalB16ViT(npz)
             nv.cuda()
             nv.train()
-            # optimizer = torch.optim.AdamW(nv.parameters(), lr=1e-3, betas=(0.9, 0.95))
-            optimizer = torch.optim.SGD(filter(lambda p: p.requires_grad, nv.parameters()), 1e-3, momentum=0.9, weight_decay=1e-4)
-            lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.2)
+            optimizer = torch.optim.AdamW(nv.parameters(), lr=1e-3, betas=(0.9, 0.95))
             f_lst.remove(i)
             # f_lst.remove(11 - config['test_fold'])
-            label,  feature, pos_embed = np.zeros((0,)), np.zeros((0,)), np.zeros((0,))
+            label,  feature, pos_embed, threeD = np.zeros((0,)), np.zeros((0,)), np.zeros((0,)), np.zeros((0,))
             for c in f_lst:
-                train_label_c, train_feature_c, train_pos_embedd = Dataprocess.readAndLoadSingleFold(c)  # finetune之后的rgb特征
+                train_label_c, train_3d_c, train_pos_embedd, train_feature_c = Dataprocess.readAndLoadSingleFold(c)  # finetune之后的rgb特征
                 label = np.concatenate((label, train_label_c))
                 feature = np.concatenate((feature, train_feature_c))
                 pos_embed = np.concatenate((pos_embed, train_pos_embedd))
-            train_dataloader = Dataprocess.ConvertVideo2SamlpesConstantSpeed(config['window_size'], feature, None, label, False, pos_embed)
-            writer_loss = SummaryWriter(f'./tb/loss/B16_AE_dep1/{i}/')
-            writer_acc_train = SummaryWriter(f'./tb/acc/B16_AE_dep1/{i}/')
+                threeD = np.concatenate((threeD, train_3d_c))
+            train_dataloader = Dataprocess.ConvertVideo2SamlpesConstantSpeed(config['window_size'], feature, threeD, label, False, pos_embed)
+            writer_loss = SummaryWriter(f'./tb/loss/ME_ae1drgb_norl/{i}/')
+            writer_acc_train = SummaryWriter(f'./tb/acc/ME_ae1drgb_norl/{i}/')
             for e in range(epoch):
                 score, total = 0, 0
                 # checkpoint = torch.load(os.path.join(config['checkpoint_pth'], f'{i}test_200.pkl'))
@@ -1014,7 +1000,7 @@ class Two_tsm_train():
                     rs = idx_pred.eq(target.reshape(-1, 1))
                     score += rs.view(-1).float().sum()
                     total += input.shape[0]
-                lr_scheduler.step()
+                # lr_scheduler.step()
                 sacal_loss = loss.detach().cpu()
                 writer_loss.add_scalar(f'train loss', sacal_loss, e)
                 print(
@@ -1026,9 +1012,8 @@ class Two_tsm_train():
                                    'epoch': e + 1,
                                    'optim': optimizer.state_dict(),
                                    'state_dict': nv.state_dict()}
-                    torch.save(checkpoints, f'/home/exp-10086/Project/ferdataset/ME_dep2_model/{i}test_{e + 1}.pkl')
-            logging.info(
-                f'------------------------------------train ends, train folds:{f_lst}-----------------------------------------------')
+                    torch.save(checkpoints, f'/home/exp-10086/Project/ferdataset/ME_ae1drgb_norl/{i}test_{e + 1}.pkl')
+            logging.info(f'------------------------------------train ends, train folds:{f_lst}-----------------------------------------------')
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='train function choice')

@@ -219,7 +219,7 @@ class Modeltest(object):
         from dataProcess import Dataprocess
         import torch
         import os
-        logging.basicConfig(format='%(asctime)s - %(filename)s[line:%(lineno)d] - %(levelname)s: %(message)s',
+        logging.basicConfig(format='%(asctime)s - %(filename)s[line:%(lineno)d] - %(levwuelname)s: %(message)s',
                             level=logging.INFO,
                             filename=config['LOG_pth'],
                             filemode='a')
@@ -228,7 +228,7 @@ class Modeltest(object):
         trans.cuda()
         trans.eval()
         acc_hat = 0
-        writer_acc_val = SummaryWriter(f'./tb/acc/test4pick/pretrain/')
+        writer_acc_val = SummaryWriter(f'./tb/acc/test4pick/pretrain/ME_ae1drgb_norl')
         optimizer = torch.optim.AdamW(trans.parameters(), lr=1e-3, betas=(0.9, 0.95))
         for cp in range(5,501,5): # 1test_0.pkl 2test_0.pkl ...
             if type(fold) is list:
@@ -236,8 +236,8 @@ class Modeltest(object):
                 for fo in fold:
                     checkpoint = torch.load(os.path.join(config['checkpoint_pth'], f'{fo}test_{cp}.pkl'))
                     trans.load_state_dict(checkpoint['state_dict'])
-                    label_val, feature_val, pos_encode_val = Dataprocess.readAndLoadSingleFold(fo)
-                    val_dataloader = Dataprocess.ConvertVideo2SamlpesConstantSpeed(config['window_size'], feature_val, None, label_val, True, pos_embed=pos_encode_val)  # variables in memory
+                    label_val,lms3d_val, pos_encode_val, feature_val = Dataprocess.readAndLoadSingleFold(fo)
+                    val_dataloader = Dataprocess.ConvertVideo2SamlpesConstantSpeed(config['window_size'], feature_val, lms3d_val, label_val, True, pos_embed=pos_encode_val)  # variables in memory
                     pred_lst, label_lst, belong_lst = [], [], []
                     for input, target, attribution, pe in val_dataloader:
                         label_lst.append(target)

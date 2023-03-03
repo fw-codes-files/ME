@@ -560,7 +560,7 @@ class NormalB16ViT(timm.models.vision_transformer.VisionTransformer):
             self.load_from(weights)
         else:
             pass
-        self.emb_proj = nn.Linear(config['T_proj_dim'],self.embed_dim) # 340->768
+        self.emb_proj = nn.Linear(config['T_proj_dim'],self.embed_dim) # 1024->768
         self.pos_embed_my = nn.Parameter(torch.zeros(1, config['window_size']+1, self.embed_dim))
         self.pos_embed_my.data.copy_(self.pos_embed[:,:config['window_size']+1,:]) # cut position embedding
         self.pred = nn.Linear(self.embed_dim,config['T_output_dim'])

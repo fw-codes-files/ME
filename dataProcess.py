@@ -537,6 +537,12 @@ class Utils():
                 frameIndex_redundancy_matrix = np.concatenate(
                     (frameIndex_redundancy_matrix, tem_sam_bool_idx.reshape(1, -1)), axis=0)
         return frameIndex_redundancy_matrix.astype('bool')
+    @classmethod
+    def flatten(cls,matrix):
+        temp = np.zeros((0,512))
+        for n in range(matrix.shape[0]):
+            temp=np.concatenate((temp,matrix[0]))
+        return np.mean(temp),np.std(temp)
 class Dataprocess():
     def __init__(self):
         pass
@@ -811,7 +817,7 @@ class Dataprocess():
         return dataloader
 
     @classmethod
-    def ConvertVideo2Samples(cls, ws, feature, lms3d, label, vote:bool = True):
+    def ConvertVideo2Samples(cls, ws, feature, lms3d, label, vote:bool = True, pos_embed = None):
         '''
             args:
                 ws: window size, also known as sequence length
@@ -824,6 +830,7 @@ class Dataprocess():
         data = []
         target = []
         samples_counter_lst = []
+        pos_embeds = []
         for f in range(0, feature.shape[0]):  # video level
             # f_mean = np.mean(feature[f][:,:512], axis=1)
             # f_std = np.std(feature[f][:,:512], axis=1)
@@ -898,20 +905,16 @@ class Dataprocess():
         target = []
         samples_counter_lst = []
         pos_embeds = []
+        m3d,s3d=Utils.flatten(lms3d)
+        # mf,sf = Utils.flatten(feature)
         for f in range(0, feature.shape[0]):  # video level
-            import open3d as o3d
-            pcd = o3d.geometry.PointCloud()
-            # f_mean = np.mean(feature[f][:,:512], axis=1)
-            # f_std = np.std(feature[f][:,:512], axis=1)
-            # feature[f][:,:512] = (feature[f][:,:512] - f_mean.reshape(-1, 1)) / f_std.reshape(-1, 1)
-
-            # l_mean = np.mean(lms3d[f], axis=1)
-            # l_std = np.std(lms3d[f], axis=1)
-            # lms3d[f] = (lms3d[f] - l_mean.reshape(-1, 1)) / l_std.reshape(-1, 1)
-
+            # import open3d as o3d
+            # pcd = o3d.geometry.PointCloud()
+            lms3d[f] = (lms3d[f]-m3d)/s3d
+            # feature[f] = (feature[f]-mf)/sf
             # concatnate and align to ws -- video level
-            ori_video = feature[f]
-            # ori_video = np.hstack((lms3d[f], feature[f][:, :512]))  # 340
+            # ori_video = feature[f]
+            ori_video = np.hstack((lms3d[f], feature[f]))  # 1024
             # ori_video = lms3d[f]
             samples_idx = Utils.ConstantSpeed(ori_video.shape[0])  # (sample num, length）
             for w in range(samples_idx.shape[0]):
@@ -922,11 +925,11 @@ class Dataprocess():
                     processed_v_s = np.concatenate((v_s, blanks), axis=0)
                 else:
                     processed_v_s = v_s.copy()
-                if w == 2:
-                    for pttth in range(6):
-                        pcd.points = o3d.utility.Vector3dVector(v_s[pttth][:204].copy().reshape((68, 3)))
-                        pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
-                        o3d.visualization.draw_geometries([pcd])
+                # if w == 2:
+                #     for pttth in range(6):
+                #         pcd.points = o3d.utility.Vector3dVector(v_s[pttth][:204].copy().reshape((68, 3)))
+                #         pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
+                #         o3d.visualization.draw_geometries([pcd])
                 data.append(processed_v_s)
                 target.append(label[f][0][0].astype(np.long))
                 if vote:
@@ -961,7 +964,7 @@ class Dataprocess():
                 dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)).cuda(),
                                       torch.from_numpy(np.array(data, dtype=np.float32)).cuda())
         dataloader = torch.utils.data.DataLoader(dataset, shuffle=config['Shuffle'], batch_size=config['batch_size'])
-
+        return dataloader
     @classmethod
     def AEinput(cls, path):
         '''
@@ -1058,13 +1061,13 @@ class Dataprocess():
         # opt.show_coordinate_frame = True
 
         label_test = np.loadtxt(f'./dataset/label_fold{fold}_test.txt').reshape(-1, 1)
-        test = np.loadtxt(f'./dataset/ft_feature{fold}.txt')
+        test = np.loadtxt(f'./dataset/feature{fold}.txt')
         test_pca = p_m.transform(test)  # pca decomposition
         lms3d_test = np.loadtxt(f'./dataset/3dlms_fold{fold}_test.txt')
         split_test = np.loadtxt(f'./dataset/split_{fold}_test.txt')
         if crop:
             test_seqs, test_l = Utils.inserCompeletely(split_test.astype(np.int_), label_test.astype(np.float32))
-            _, test_feature = Utils.inserCompeletely(split_test.astype(np.int_), test.astype(np.float32))
+            _, test_feature = Utils.inserCompeletely(split_test.astype(np.int_), test_pca.astype(np.float32))
             _, test_lms3d = Utils.inserCompeletely(split_test.astype(np.int_), lms3d_test.astype(np.float32).reshape(-1, 204))
             if peak_frame:
                 pos_embed_lst = []
@@ -1102,23 +1105,25 @@ class Dataprocess():
             prefix = fl.split(' ')[0]
             prefix = prefix.replace('/','_')
             pf_lst.append(prefix)
-        AE_root = '/home/exp-10086/Project/ferdataset/CK_AE_CODE'
+        AE_root = '/home/exp-10086/Project/ferdataset/CK_AE_CODE_1d'
         aes = os.listdir(AE_root)
         aes.sort()
-        test = np.zeros((0,512))
+        test_3d = np.zeros((0,512))
         split_test = np.loadtxt(f'./dataset/split_{fold}_test.txt')
         for pf in pf_lst:
             for a in aes:
                 if a.__contains__(pf):
                     ae_feaure = np.loadtxt(os.path.join(AE_root, a))
-                    test = np.concatenate((test, ae_feaure.reshape(1,512)), axis=0)
-        _, test_feature = Utils.inserCompeletely(split_test.astype(np.int_), test.astype(np.float32))
+                    test_3d = np.concatenate((test_3d, ae_feaure.reshape(1,512)), axis=0)
+        _, test_3d_code = Utils.inserCompeletely(split_test.astype(np.int_), test_3d.astype(np.float32))
         pos_embed_lst = []
-        for t_f in test_feature:
+        for t_f in test_3d_code:
             pos_embed_lst.append(Utils.SinusoidalEncoding(t_f.shape[0], config['T_input_dim'])[::-1,:])  # 1 offset means except cls token position
         label_test = np.loadtxt(f'./dataset/label_fold{fold}_test.txt').reshape(-1, 1)
         _, test_l = Utils.inserCompeletely(split_test.astype(np.int_), label_test.astype(np.float32))
-        return test_l, test_feature, np.array(pos_embed_lst, dtype=object)
+        test = np.loadtxt(f'./dataset/ft_feature{fold}.txt')
+        _, test_feature = Utils.inserCompeletely(split_test.astype(np.int_), test.astype(np.float32))
+        return test_l, test_3d_code, np.array(pos_embed_lst, dtype=object), test_feature
     @classmethod
     def saveFacePicture(cls):
         import tqdm
@@ -1216,7 +1221,7 @@ class Dataprocess():
         return dataloader
 
     @classmethod
-    def ConvertVideo2Samples100Votes(cls, ws, feature, lms3d, label, vote:bool = True):
+    def ConvertVideo2Samples100Votes(cls, ws, feature, lms3d, label, vote:bool = True, pos_embed=None):
         '''
             args:
                 ws: window size, also known as sequence length
@@ -1229,6 +1234,7 @@ class Dataprocess():
         data = []
         target = []
         samples_counter_lst = []
+        pos_embeds = []
         for f in range(0, feature.shape[0]):  # video level
             # f_mean = np.mean(feature[f][:,:512], axis=1)
             # f_std = np.std(feature[f][:,:512], axis=1)
@@ -1276,76 +1282,15 @@ class Dataprocess():
                     target.append(label[f][0][0].astype(np.long))
                     if vote:
                         samples_counter_lst.append(f)
-        # dataset and dataloader
-        if vote:
-            dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)),
-                                  torch.from_numpy(np.array(data, dtype=np.float32)),
-                                  torch.from_numpy(np.array(samples_counter_lst, dtype=np.float32)))
-        else:
-            dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)).cuda(),
-                                  torch.from_numpy(np.array(data, dtype=np.float32)).cuda())
-        dataloader = torch.utils.data.DataLoader(dataset, shuffle=config['Shuffle'], batch_size=config['batch_size'])
-        return dataloader
-
-    @classmethod
-    def ConvertVideo2SamlpesConstantSpeed(cls, ws, feature, lms3d, label, vote: bool = True, pos_embed=None):
-        '''
-            args:
-                ws: window size, also known as sequence length
-                feature: deep feature from imgages
-                lms3d: 3D landmarks
-                label: target data
-                vote: count voting
-                pos_embed: origin video's frames's cosine-sine position embedding, peak frame's position is fixed.
-            return:
-                dataloader
-        '''
-        data = []
-        target = []
-        samples_counter_lst = []
-        pos_embeds = []
-        for f in range(0, feature.shape[0]):  # video level
-            # import open3d as o3d
-            # pcd = o3d.geometry.PointCloud()
-            # f_mean = np.mean(feature[f][:,:512], axis=1)
-            # f_std = np.std(feature[f][:,:512], axis=1)
-            # feature[f][:,:512] = (feature[f][:,:512] - f_mean.reshape(-1, 1)) / f_std.reshape(-1, 1)
-
-            # l_mean = np.mean(lms3d[f], axis=1)
-            # l_std = np.std(lms3d[f], axis=1)
-            # lms3d[f] = (lms3d[f] - l_mean.reshape(-1, 1)) / l_std.reshape(-1, 1)
-
-            # concatnate and align to ws -- video level
-            ori_video = feature[f]
-            # ori_video = np.hstack((lms3d[f], feature[f][:, :512]))  # 340
-            # ori_video = lms3d[f]
-            samples_idx = Utils.ConstantSpeed(ori_video.shape[0])  # (sample num, length）
-            for w in range(samples_idx.shape[0]):
-                v_s = ori_video[samples_idx[w]]  # 采样的样本
-                if v_s.shape[0] < ws:
-                    EOS_num = ws - v_s.shape[0]
-                    blanks = np.tile(EOS, (EOS_num, 1))
-                    processed_v_s = np.concatenate((v_s, blanks), axis=0)
-                else:
-                    processed_v_s = v_s.copy()
-                # if w == 2:
-                #     for pttth in range(6):
-                #         pcd.points = o3d.utility.Vector3dVector(v_s[pttth][:204].copy().reshape((68, 3)))
-                #         pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
-                #         o3d.visualization.draw_geometries([pcd])
-                data.append(processed_v_s)
-                target.append(label[f][0][0].astype(np.long))
-                if vote:
-                    samples_counter_lst.append(f)
-                if pos_embed is not None:
-                    pe_p = pos_embed[f][samples_idx[w]]
-                    if pe_p.shape[0] < ws:
-                        EOS_num = ws - pe_p.shape[0]
-                        blanks = np.tile(PE_EOS, (EOS_num, 1))
-                        processed_pe = np.concatenate((pe_p, blanks), axis=0)
-                    else:
-                        processed_pe = pe_p.copy()
-                    pos_embeds.append(processed_pe)
+                    if pos_embed is not None:
+                        pe_p = pos_embed[f][list(samples[w].astype(int))]
+                        if pe_p.shape[0] < ws:
+                            EOS_num = ws - pe_p.shape[0]
+                            blanks = np.tile(PE_EOS, (EOS_num, 1))
+                            processed_pe = np.concatenate((pe_p, blanks), axis=0)
+                        else:
+                            processed_pe = pe_p.copy()
+                        pos_embeds.append(processed_pe)
         # dataset and dataloader !!! x,y 是必须的，有无voting和有无fixed peak frame position变成了4个情况。
         if vote:  # 用于test
             if pos_embed is not None:  # 用于peak frame fixed position encoding
@@ -1368,6 +1313,8 @@ class Dataprocess():
                                       torch.from_numpy(np.array(data, dtype=np.float32)).cuda())
         dataloader = torch.utils.data.DataLoader(dataset, shuffle=config['Shuffle'], batch_size=config['batch_size'])
         return dataloader
+
+
 
     @classmethod
     def rgbPatchFea(cls):
