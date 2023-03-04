@@ -1,6 +1,4 @@
 import random
-import time
-
 import numpy as np
 import cv2
 import os
@@ -26,8 +24,6 @@ PE_EOS = np.zeros((1, config['T_input_dim']))
 standardImg = cv2.imread('./img.png')  # used to through 3DDFA net, then pointcloud produced by this picture will be a standard face pose. All face pose will be aligned to this face's pointcloud pose
 softmax = torch.nn.Softmax(dim=1)
 p_m = joblib.load('/home/exp-10086/Project/ME/weights/pca.m')
-
-
 class LSTMDataSet(data.Dataset):
     '''
         this class has no problem, just convert data to dataset
@@ -53,8 +49,6 @@ class LSTMDataSet(data.Dataset):
             return self.input[idx], self.target[idx]
     def __len__(self):
         return self.target.shape[0]
-
-
 class Utils():
 
     def __init__(self):
@@ -345,17 +339,15 @@ class Utils():
         new_spilt = []
         new_data_lst = []
         for s in range(split.shape[0]):
-            # if split[s] < config['Least_frame']:
-            # 插值，小于least frame帧的都拉长放在new_data_lst
             ori_data = data_np[start_idx:start_idx + int(split[s])].copy()
-            inserted = Utils.atomicityInsert(ori_data)
-            new_data_lst.append(inserted)
-            new_spilt.append(inserted.shape[0])
+            if split[s] < 9: # 95%
+                inserted = Utils.atomicityInsert(ori_data)
+                new_data_lst.append(inserted)
+                new_spilt.append(inserted.shape[0])
+            else:
+                new_data_lst.append(ori_data)
+                new_spilt.append(int(split[s]))
             start_idx += int(split[s])
-            # else:
-            #     new_spilt.append(split[s])
-            #     new_data_lst.append(data_np[start_idx:start_idx + int(split[s])])
-            #     start_idx += int(split[s])
         return np.array(new_spilt, dtype=object), np.array(new_data_lst, dtype=object)
 
     @classmethod
@@ -546,7 +538,6 @@ class Utils():
 class Dataprocess():
     def __init__(self):
         pass
-
     @classmethod
     def deleleDS_Store(cls):
         '''
@@ -564,7 +555,6 @@ class Dataprocess():
                 for i in img:
                     if i.endswith('DS_Store'):
                         os.remove(os.path.join(img_pth, i))
-
     @classmethod
     def loadCKPlusData(cls, test_fold):
         import tqdm
@@ -690,7 +680,6 @@ class Dataprocess():
             with open(f'./dataset/split_{test_fold}_test.txt', 'ab') as nfn:
                 # np.savetxt(nfn, np.array(fms).reshape([1, -1]))
                 pass
-
     @classmethod
     def dataForLSTM(cls, fold, crop: bool = False):
         '''
@@ -723,7 +712,6 @@ class Dataprocess():
             return train_l, train_feature, train_lms3d, train_seqs, test_l, test_feature, test_lms3d, test_seqs
         else:
             return label_train, train, lms3d_train, split_train, label_test, test, lms3d_test, split_test
-
     @classmethod
     def pca(cls, ori_data, seqs, flag):
         '''
@@ -751,7 +739,6 @@ class Dataprocess():
             pca_lst.append(pca_data[idx:idx + s])
             idx += s
         return np.array(pca_lst, dtype=object)
-
     @classmethod
     def dataAlign2WindowSize(cls, ws, feature, lms3d, label, use_AE: bool = False, vote:bool=False, step = 1):
         '''
@@ -815,7 +802,6 @@ class Dataprocess():
         dataloader = torch.utils.data.DataLoader(dataset, shuffle=config['Shuffle'], batch_size=config['batch_size'])
 
         return dataloader
-
     @classmethod
     def ConvertVideo2Samples(cls, ws, feature, lms3d, label, vote:bool = True, pos_embed = None):
         '''
@@ -887,7 +873,6 @@ class Dataprocess():
                                   torch.from_numpy(np.array(data, dtype=np.float32)).cuda())
         dataloader = torch.utils.data.DataLoader(dataset, shuffle=config['Shuffle'], batch_size=config['batch_size'])
         return dataloader
-
     @classmethod
     def ConvertVideo2SamlpesConstantSpeed(cls, ws, feature, lms3d, label, vote: bool = True, pos_embed=None):
         '''
@@ -906,17 +891,16 @@ class Dataprocess():
         samples_counter_lst = []
         pos_embeds = []
         m3d,s3d=Utils.flatten(lms3d)
-        # mf,sf = Utils.flatten(feature)
         for f in range(0, feature.shape[0]):  # video level
             # import open3d as o3d
             # pcd = o3d.geometry.PointCloud()
             lms3d[f] = (lms3d[f]-m3d)/s3d
-            # feature[f] = (feature[f]-mf)/sf
             # concatnate and align to ws -- video level
-            # ori_video = feature[f]
-            ori_video = np.hstack((lms3d[f], feature[f]))  # 1024
+            ori_video = feature[f]
+            # ori_video = np.hstack((lms3d[f], feature[f]))  # 1024
             # ori_video = lms3d[f]
-            samples_idx = Utils.ConstantSpeed(ori_video.shape[0])  # (sample num, length）
+            # samples_idx = Utils.ConstantSpeed(ori_video.shape[0])  # (sample num, length）
+            samples_idx = np.array(([[-9,-8,-7,-6,-5,-4,-3,-2,-1]]))
             for w in range(samples_idx.shape[0]):
                 v_s = ori_video[samples_idx[w]]  # 采样的样本
                 if v_s.shape[0] < ws:
@@ -1004,7 +988,6 @@ class Dataprocess():
         to_writ = noisy_rs.reshape((-1, 204))
         np.savetxt('./dataset/AE_3dlms.txt', to_writ)
         print('数据保存完毕')
-
     @classmethod
     def AEdataload(cls):
         '''
@@ -1020,7 +1003,6 @@ class Dataprocess():
         test_dataloader = torch.utils.data.DataLoader(dataset[test_division:], shuffle=True,
                                                       batch_size=config['batch_size'])
         return train_dataloader, test_dataloader
-
     @classmethod
     def AE_feature(cls, epoch, mid_dim, fold, split_train, split_test):
         from model import AutoEncoder
@@ -1048,7 +1030,6 @@ class Dataprocess():
         _, sp_train_feature = Utils.insertOrSample(split_train.astype(np.int_), train_feature.astype(np.float32))
         _, sp_test_feature = Utils.insertOrSample(split_test.astype(np.int_), test_feature.astype(np.float32))
         return sp_train_feature, sp_test_feature
-
     @classmethod
     def loadSingleFold(cls, fold, crop, peak_frame=False):
         # import open3d as o3d
@@ -1173,7 +1154,6 @@ class Dataprocess():
                             eye_centers = Utils.getEyesAverage(crop_lms[0])  # 得到的是散装序列，若是按img，face 划分需要用face_num_per_img变量进行划分
                             aligned_boxed_img = Utils.face_align(boxed_imgs[0], eye_centers)  # 和上一行的对应起来，都只取了第一张人脸
                             cv2.imwrite(f'{root}cut/{s}/{p}/{i}',aligned_boxed_img)
-
     @classmethod
     def baseline(cls, ws, feature, lms3d, label, vote:bool=False):
         '''
@@ -1219,7 +1199,6 @@ class Dataprocess():
                                   torch.from_numpy(np.array(data, dtype=np.float32)).cuda())
         dataloader = torch.utils.data.DataLoader(dataset, shuffle=config['Shuffle'], batch_size=config['batch_size'])
         return dataloader
-
     @classmethod
     def ConvertVideo2Samples100Votes(cls, ws, feature, lms3d, label, vote:bool = True, pos_embed=None):
         '''
@@ -1313,9 +1292,6 @@ class Dataprocess():
                                       torch.from_numpy(np.array(data, dtype=np.float32)).cuda())
         dataloader = torch.utils.data.DataLoader(dataset, shuffle=config['Shuffle'], batch_size=config['batch_size'])
         return dataloader
-
-
-
     @classmethod
     def rgbPatchFea(cls):
         import dlib
@@ -1345,7 +1321,6 @@ class Dataprocess():
         # dlib bounding box
         # dlib landmarks
         # dlib landmarks patch
-
     @classmethod
     def pretrainDataProcess(cls):
         import tqdm
@@ -1445,5 +1420,5 @@ if __name__ == '__main__':
     # 68 lms2d
     # Dataprocess.rgbPatchFea()
     # Dataprocess.pretrainDataProcess()
-    Dataprocess.readAndLoadSingleFold(1, True)
+    # Dataprocess.readAndLoadSingleFold(1, True)
     pass

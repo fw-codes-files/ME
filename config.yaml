@@ -53,7 +53,7 @@ PCA_dir: './weights/pca.m'
 # data sample strategy config
 Least_frame: 20
 Max_frame: 40
-window_size: 6
+window_size: 9
 Sample_frequency: 1
 Shuffle: True
 standBy: 200
@@ -71,7 +71,7 @@ T_pro_dim: 256
 T_input_dim: 768
 T_block_num: 6
 T_head_num: 8
-T_proj_dim: 1024
+T_proj_dim: 512
 T_forward_dim: 2048
 T_masked: True
 T_activation: 'gelu'
@@ -102,10 +102,10 @@ learning_rate: 1e-3
 epoch: 500
 fast_fold: [1,5,9]
 test_fold: 10
-checkpoint_pth: '/home/exp-10086/Project/ferdataset/ME_ae1drgb_norl/'
+checkpoint_pth: '/home/exp-10086/Project/ferdataset/pureRgbmean/'
 cuda_idx: '0'
 # data Post process config
 vote: False
 # log information config
-LOG_CHECK: '!!!train: vit: 1channel code+rgb , 1024->768, bs 64, lr 1e-3, epoch 500, input 768, adamW, dep1, with npz ,ws 6 ,all range normalized'
+LOG_CHECK: '!!!train: rgb mean , 512->768, bs 64, lr 1e-3, epoch 500, input 768, adamW, dep1, with npz ,ws 9[95%]'
 LOG_pth: 'train.log'

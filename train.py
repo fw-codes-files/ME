@@ -983,8 +983,8 @@ class Two_tsm_train():
                 pos_embed = np.concatenate((pos_embed, train_pos_embedd))
                 threeD = np.concatenate((threeD, train_3d_c))
             train_dataloader = Dataprocess.ConvertVideo2SamlpesConstantSpeed(config['window_size'], feature, threeD, label, False, pos_embed)
-            writer_loss = SummaryWriter(f'./tb/loss/ME_ae1drgb_norl/{i}/')
-            writer_acc_train = SummaryWriter(f'./tb/acc/ME_ae1drgb_norl/{i}/')
+            writer_loss = SummaryWriter(f'./tb/loss/pureRgbmean/{i}/')
+            writer_acc_train = SummaryWriter(f'./tb/acc/pureRgbmean/{i}/')
             for e in range(epoch):
                 score, total = 0, 0
                 # checkpoint = torch.load(os.path.join(config['checkpoint_pth'], f'{i}test_200.pkl'))
@@ -1012,7 +1012,7 @@ class Two_tsm_train():
                                    'epoch': e + 1,
                                    'optim': optimizer.state_dict(),
                                    'state_dict': nv.state_dict()}
-                    torch.save(checkpoints, f'/home/exp-10086/Project/ferdataset/ME_ae1drgb_norl/{i}test_{e + 1}.pkl')
+                    torch.save(checkpoints, f'/home/exp-10086/Project/ferdataset/pureRgbmean/{i}test_{e + 1}.pkl')
             logging.info(f'------------------------------------train ends, train folds:{f_lst}-----------------------------------------------')
 def main():
     import argparse

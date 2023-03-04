@@ -228,7 +228,7 @@ class Modeltest(object):
         trans.cuda()
         trans.eval()
         acc_hat = 0
-        writer_acc_val = SummaryWriter(f'./tb/acc/test4pick/pretrain/ME_ae1drgb_norl')
+        writer_acc_val = SummaryWriter(f'./tb/acc/test4pick/pretrain/pureRgbmean')
         optimizer = torch.optim.AdamW(trans.parameters(), lr=1e-3, betas=(0.9, 0.95))
         for cp in range(5,501,5): # 1test_0.pkl 2test_0.pkl ...
             if type(fold) is list:
