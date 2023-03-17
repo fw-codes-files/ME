@@ -1,5 +1,7 @@
 import os
 import time
+
+import tqdm
 import yaml
 config = yaml.safe_load(open('./config.yaml'))
 os.environ['CUDA_VISIBLE_DEVICES'] = config['cuda_idx']
@@ -9,7 +11,7 @@ import dataProcess
 
 import torch
 from dataProcess import Dataprocess
-from model import LSTMModel
+from model import *
 from tqdm import trange
 import logging
 import math
@@ -170,30 +172,40 @@ class LSTM_model_traintest(object):
                 cut: if Ture, record accuracy at last epoch; if False, record best accuracy of every fold.
                 epoch:
         '''
-        acc_lst = [0] * 10
+        from torch.utils.tensorboard import SummaryWriter
         if fast:
             f_lst = config['fast_fold']
         else:
-            f_lst = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-        for fold in f_lst:
-            lstm = LSTMModel(inputDim=config['LSTM_input_dim'], hiddenNum=config['LSTM_hidden_dim'],
-                             outputDim=config['LSTM_output_dim'], layerNum=config['LSTM_layerNum'],
-                             cell=config['LSTM_cell'], use_cuda=config['use_cuda'],feature_dim=64)
+            f_lst = [1, 2, 3, 4, 5]
+        for i in range(1,2):
+            f_lst = [1, 2, 3, 4, 5]
+            f_lst.remove(i)
+            lstm = ORILSTM(inputDim=config['LSTM_input_dim'], hiddenNum=config['LSTM_hidden_dim'],
+                           outputDim=config['LSTM_output_dim'], layerNum=config['LSTM_layerNum'],
+                           cell=config['LSTM_cell'], use_cuda=config['use_cuda'])
             lstm.cuda()
-            optimizer = torch.optim.RMSprop(lstm.parameters(), lr=float(config['learning_rate']), momentum=0.9)
+            optimizer = torch.optim.AdamW(lstm.parameters(), lr=float(config['learning_rate']),betas=(0.9, 0.95))
             loss_func = torch.nn.CrossEntropyLoss()
-            label, feature, lms3d, seqs, label_test, feature_test, lms3d_test, seqs_test = Dataprocess.dataForLSTM(fold, crop=True)
-            # pca_lms3d = Dataprocess.pca(lms3d, seqs, True)
-            train_dataloader = Dataprocess.dataAlign2WindowSize(config['window_size'], feature, lms3d, label, int(config['Sample_frequency']))
-            # pca_lms3d_test = Dataprocess.pca(lms3d_test,seqs_test, False)
-            test_dataloader = Dataprocess.dataAlign2WindowSize(config['window_size'], feature_test, lms3d_test, label_test, int(config['Sample_frequency']))
-            # acc = getAcc(fold)
-            acc = 0
+            label, lms3d, feature, seqs = np.zeros((0,)), np.zeros((0,)), np.zeros((0,)), np.zeros((0,))
+            for c in f_lst:
+                train_label_c, train_feature_c, train_lms3d_c, train_seqs_c, _ = Dataprocess.loadSingleFoldOF(c)
+                label = np.concatenate((label, train_label_c))
+                lms3d = np.concatenate((lms3d, train_lms3d_c))
+                feature = np.concatenate((feature, train_feature_c))
+                seqs = np.concatenate((seqs, train_seqs_c))
+            train_label_c, train_feature_c, train_lms3d_c, train_seqs_c, _ = Dataprocess.loadSingleFoldOF(i, True)
+            label = np.concatenate((label, train_label_c))
+            lms3d = np.concatenate((lms3d, train_lms3d_c))
+            feature = np.concatenate((feature, train_feature_c))
+            seqs = np.concatenate((seqs, train_seqs_c))
+            # pos_embed = np.concatenate((pos_embed, train_pos_embedd))
+            train_dataloader = Dataprocess.VideoNaive(config['window_size'], feature, None, label, False, pos_embed=None)
+            lstm.train()
+            writer_loss = SummaryWriter(f'./tb/loss/B16_OF_lstm/{i}/')
+            writer_acc_train = SummaryWriter(f'./tb/acc/B16_OF_lstm/{i}/')
             for e in trange(epoch):
-                lstm.train()
                 score = 0
                 total = 0
-                # train
                 for input, target in train_dataloader:
                     optimizer.zero_grad()
                     pred = lstm(input)
@@ -205,33 +217,19 @@ class LSTM_model_traintest(object):
                     rs = idx_pred.eq(target.reshape(-1, 1))
                     score += rs.view(-1).float().sum()
                     total += input.shape[0]
-                    print('\r' + f'fold:{fold} epoch:{e} loss:{loss} acc:{score / total * 100}% ', end='', flush=True)
+                    print('\r' + f'fold:{i} epoch:{e} loss:{loss} acc:{score / total * 100}% ', end='', flush=True)
                     if math.isnan(loss):
                         break
-                # eval
-                score_t = 0
-                total_t = 0
-                lstm.eval()
-                for test_input, test_label in test_dataloader:
-                    pred = lstm(test_input)
-                    idx_pred = torch.topk(pred, 1, dim=1)[1]
-                    rs = idx_pred.eq(test_label.reshape(-1, 1))
-                    score_t += rs.view(-1).float().sum()
-                    total_t += test_input.shape[0]
-                print(f'eval acc:{score_t / total_t * 100}%')
-                if cut:
-                    acc = score_t / total_t
-                    acc_lst[fold - 1] = acc
-                    logging.info(f'./weights/minibatch_fold_{fold}_epoch_{e}_acc_{acc}_bs_{config["batch_size"]}_lr_{config["learning_rate"]}_ln_{config["LSTM_layerNum"]}_hd_{config["LSTM_hidden_dim"]}_ws_{config["window_size"]}')
-                else:
-                    if acc < score_t / total_t:
-                        acc = score_t / total_t
-                        acc_lst[fold - 1] = acc
-                        logging.info(f'./weights/minibatch_fold_{fold}_epoch_{e}_acc_{acc}_bs_{config["batch_size"]}_lr_{config["learning_rate"]}_ln_{config["LSTM_layerNum"]}_hd_{config["LSTM_hidden_dim"]}_ws_{config["window_size"]}')
-            logging.info(f'------------------------------------fold{fold} ends-----------------------------------------------')
-        logging.info('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
-        logging.info(f'{len(f_lst)} folds average acc is {sum(acc_lst) / len(f_lst)}')
-        logging.info('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+                sacal_loss = loss.detach().cpu()
+                writer_loss.add_scalar(f'train loss', sacal_loss, e)
+                writer_acc_train.add_scalar('train acc', score / total * 100, e)
+                if (e+1)%1==0:
+                    checkpoints = {'model_type': 'lstm',
+                                   'epoch': e + 1,
+                                   'optim': optimizer.state_dict(),
+                                   'state_dict': lstm.state_dict()}
+                    torch.save(checkpoints, f'/home/exp-10086/Project/ferdataset/ourFace/lstmRgb/{i}test_{e + 1}.pkl')
+            logging.info(f'------------------------------------fold{c} ends-----------------------------------------------')
 class Transformer_traintest():
     def __init__(self):
         pass
@@ -907,36 +905,44 @@ class Two_tsm_train():
         from model import NormalB16ViT
         from torch.utils.tensorboard import SummaryWriter
         from numpy import load
-        npz = load('./weights/imagenet21k_ViT-B_16.npz')
+        from dataProcess import Utils
+        # npz = load('./weights/imagenet21k_ViT-B_16.npz')
         loss_func = torch.nn.CrossEntropyLoss()
-
-        for i in range(1, 11):
-            f_lst = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-            nv = NormalB16ViT(npz)
+        pos_encoding = Utils.SinusoidalEncoding(270, config['T_proj_dim'])
+        for i in range(1, 2):
+            f_lst = [1, 2, 3, 4, 5]
+            nv = NormalB16ViT(None)
             nv.cuda()
             nv.train()
             optimizer = torch.optim.AdamW(nv.parameters(), lr=1e-3, betas=(0.9, 0.95))
             f_lst.remove(i)
             # f_lst.remove(11 - config['test_fold'])
-            label, lms3d, feature, seqs, pos_embed = np.zeros((0,)), np.zeros((0,)), np.zeros((0,)), np.zeros((0,)), np.zeros((0,))
+            label, lms3d, feature, seqs, = np.zeros((0,)), np.zeros((0,)), np.zeros((0,)), np.zeros((0,))
             for c in f_lst:
-                train_label_c, train_feature_c, train_lms3d_c, train_seqs_c, train_pos_embedd = Dataprocess.loadSingleFold(c, True, True)  # finetune之后的rgb特征
+                train_label_c, train_feature_c, train_lms3d_c, train_seqs_c, _ = Dataprocess.loadSingleFoldOF(c)
                 label = np.concatenate((label, train_label_c))
                 lms3d = np.concatenate((lms3d, train_lms3d_c))
                 feature = np.concatenate((feature, train_feature_c))
                 seqs = np.concatenate((seqs, train_seqs_c))
-                pos_embed = np.concatenate((pos_embed, train_pos_embedd))
-            train_dataloader = Dataprocess.ConvertVideo2SamlpesConstantSpeed(config['window_size'], feature, lms3d, label, False, pos_embed)
-            writer_loss = SummaryWriter(f'./tb/loss/B16_3dlms/{i}/')
-            writer_acc_train = SummaryWriter(f'./tb/acc/B16_3dlms/{i}/')
+                # pos_embed = np.concatenate((pos_embed, train_pos_embedd))
+            # 第5个fold中再取出来半fold，这样相当于10fold
+            train_label_c, train_feature_c, train_lms3d_c, train_seqs_c, _ = Dataprocess.loadSingleFoldOF(i,True)
+            label = np.concatenate((label, train_label_c))
+            lms3d = np.concatenate((lms3d, train_lms3d_c))
+            feature = np.concatenate((feature, train_feature_c))
+            seqs = np.concatenate((seqs, train_seqs_c))
+            # pos_embed = np.concatenate((pos_embed, train_pos_embedd))
+            train_dataloader = Dataprocess.VideoNaive(config['window_size'], feature, lms3d, label, False, None)
+            writer_loss = SummaryWriter(f'./tb/loss/B16_OF/{i}/')
+            writer_acc_train = SummaryWriter(f'./tb/acc/B16_OF/{i}/')
             for e in range(epoch):
                 score, total = 0, 0
                 # checkpoint = torch.load(os.path.join(config['checkpoint_pth'], f'{i}test_200.pkl'))
                 # nv.load_state_dict(checkpoint['state_dict'])
                 # optimizer.load_state_dict(checkpoint['optim'])
-                for input, target, postion_embedding in train_dataloader:
+                for input, target in train_dataloader:
                     optimizer.zero_grad()
-                    pred = nv(input, postion_embedding)
+                    pred = nv(input, pos_encoding)
                     loss = loss_func(pred, target.long())
                     loss.backward()
                     optimizer.step()
@@ -944,27 +950,25 @@ class Two_tsm_train():
                     rs = idx_pred.eq(target.reshape(-1, 1))
                     score += rs.view(-1).float().sum()
                     total += input.shape[0]
-                sacal_loss = loss.detach().cpu()
+                    sacal_loss = loss.detach().cpu()
                 writer_loss.add_scalar(f'train loss', sacal_loss, e)
                 print(
-                    '\r' + f'fold {i} epoch:{e} loss:{loss} acc:{score / total * 100}% lr:{optimizer.param_groups[0]["lr"]}',
+                    '\r' + f'fold {i} epoch:{e} loss:{loss} acc:{score / total * 100}% lr:{optimizer.param_groups[0]["lr"]} ',
                     end='', flush=True)
                 writer_acc_train.add_scalar('train acc', score / total * 100, e)
-                if (e + 1) % 5 == 0:
+                if (e+1) % 1 == 0:
                     checkpoints = {'model_type': 'ViT',
                                    'epoch': e + 1,
                                    'optim': optimizer.state_dict(),
                                    'state_dict': nv.state_dict()}
-                    torch.save(checkpoints, f'/home/exp-10086/Project/ferdataset/ME_3dlms/{i}test_{e + 1}.pkl')
-            logging.info(
-                f'------------------------------------train ends, train folds:{f_lst}-----------------------------------------------')
-
+                    torch.save(checkpoints, f'/home/exp-10086/Project/ferdataset/ourFace/vit/{i}test_{e+1}.pkl')
+            logging.info(f'------------------------------------train ends, train folds:{f_lst}-----------------------------------------------')
     @classmethod
     def B16Vit_AE(cls, epoch):
         from model import NormalB16ViT
         from torch.utils.tensorboard import SummaryWriter
         from numpy import load
-        npz = load('./weights/imagenet21k_ViT-B_16.npz')
+        npz = load('/home/exp-10086/Project/ferdataset/ViT-H_14.npz')
         loss_func = torch.nn.CrossEntropyLoss()
 
         for i in range(1, 11):
@@ -983,8 +987,8 @@ class Two_tsm_train():
                 pos_embed = np.concatenate((pos_embed, train_pos_embedd))
                 threeD = np.concatenate((threeD, train_3d_c))
             train_dataloader = Dataprocess.ConvertVideo2SamlpesConstantSpeed(config['window_size'], feature, threeD, label, False, pos_embed)
-            writer_loss = SummaryWriter(f'./tb/loss/pureRgbmean/{i}/')
-            writer_acc_train = SummaryWriter(f'./tb/acc/pureRgbmean/{i}/')
+            writer_loss = SummaryWriter(f'./tb/loss/c1AE_Rgbmean/{i}/')
+            writer_acc_train = SummaryWriter(f'./tb/acc/c1AE_Rgbmean/{i}/')
             for e in range(epoch):
                 score, total = 0, 0
                 # checkpoint = torch.load(os.path.join(config['checkpoint_pth'], f'{i}test_200.pkl'))
@@ -1012,12 +1016,56 @@ class Two_tsm_train():
                                    'epoch': e + 1,
                                    'optim': optimizer.state_dict(),
                                    'state_dict': nv.state_dict()}
-                    torch.save(checkpoints, f'/home/exp-10086/Project/ferdataset/pureRgbmean/{i}test_{e + 1}.pkl')
+                    torch.save(checkpoints, f'/home/exp-10086/Project/ferdataset/c1AE_Rgbmean/{i}test_{e + 1}.pkl')
             logging.info(f'------------------------------------train ends, train folds:{f_lst}-----------------------------------------------')
+    @classmethod
+    def B16Vit_NoMidData(cls, epoch):
+        from model import NormalB16ViT
+        from torch.utils.tensorboard import SummaryWriter
+        from dataProcess import Utils
+
+        loss_func = torch.nn.CrossEntropyLoss()
+        pos_encoding = Utils.SinusoidalEncoding(50, config['T_proj_dim'])
+        itt = 0
+        for i in range(1, 2): # 用几个fold进行训练
+            nv = NormalB16ViT(None)
+            nv.cuda()
+            nv.train()
+            optimizer = torch.optim.AdamW(nv.parameters(), lr=1e-3, betas=(0.9, 0.95))
+            # 开始准备数据
+            train_dataloader = Dataprocess.loadFERModelIntoDataloader(i,'train')
+            # 开始记录指标
+            writer_loss = SummaryWriter(f'./tb/loss/B16_OF/{i}/')
+            writer_acc_train = SummaryWriter(f'./tb/acc/B16_OF/{i}/')
+            # 开始训练
+            for e in range(epoch):
+                score, total = 0, 0
+                for input, target,_ in tqdm.tqdm(train_dataloader):
+                    optimizer.zero_grad()
+                    pred = nv(input, pos_encoding)
+                    loss = loss_func(pred, target.long())
+                    loss.backward()
+                    optimizer.step()
+                    #
+                    idx_pred = torch.topk(pred, 1, dim=1)[1]
+                    rs = idx_pred.eq(target.reshape(-1, 1))
+                    score += rs.view(-1).float().sum()
+                    total += input.shape[0]
+                    #
+                    if (itt+1) % 10 ==0:
+                        writer_loss.add_scalar(f'train loss', loss.detach().cpu(), itt)
+                        writer_acc_train.add_scalar('train acc', score / total * 100, itt)
+                        print('train acc:',score / total * 100, 'epoch', e, f'[{itt+1}/{len(train_dataloader)}]')
+                        checkpoints = {'model_type': 'ViT',
+                                       'optim': optimizer.state_dict(),
+                                       'state_dict': nv.state_dict()}
+                        torch.save(checkpoints, f'/home/exp-10086/Project/ferdataset/ourFace/vit/{i}test_{e}.pkl')
+                    itt += 1
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='train function choice')
-    parser.add_argument('-M', default='B16_AE', type=str, metavar='N',
+    parser.add_argument('-M', default='B16_check', type=str, metavar='N',
                         help='s means single and m means minibatch')
     args = parser.parse_args()
     if args.M == 'single': # lstm train with bs=1
@@ -1052,5 +1100,7 @@ def main():
         Two_tsm_train.B16Vit(config['epoch'])
     elif args.M == 'B16_AE':
         Two_tsm_train.B16Vit_AE(config['epoch'])
+    elif args.M == 'B16_check':
+        Two_tsm_train.B16Vit_NoMidData(config['epoch'])
 if __name__ == '__main__':
     main()

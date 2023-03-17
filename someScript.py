@@ -450,6 +450,70 @@ def testnumpyinsert():
     b = np.eye(4)
     c = list(zip(a,b))
     print(np.array(c).reshape(-1,4))
+def OFmaxMin():
+    for i in range(1,6):
+        print(np.max(np.loadtxt(f'/home/exp-10086/Project/ferdataset/ourFace/seq/seq_{i}.txt')))
+        print(np.min(np.loadtxt(f'/home/exp-10086/Project/ferdataset/ourFace/seq/seq_{i}.txt')))
+        print(np.median(np.loadtxt(f'/home/exp-10086/Project/ferdataset/ourFace/seq/seq_{i}.txt')))
+def paramintotxt(fold):
+    fold_root = '/home/exp-10086/Project/Emotion-FAN-master/data/txt/CK+_10-fold_sample_IDascendorder_step10.txt'
+    fold_fp = open(fold_root)
+    lines = fold_fp.readlines()
+    start = 0
+    for lidx, l in enumerate(lines):
+        if l.__contains__(f'{fold}-fold'):
+            vn = l.split(' ')[1]
+            start = lidx
+            break
+        else:
+            continue
+    fold_lines = lines[start + 1:start + int(vn) + 1]
+    root = '/home/exp-10086/Project/ferdataset/ck_alpha_param'
+
+    for params in fold_lines:
+        ps = os.listdir(os.path.join(root, params.split(' ')[0]))
+        ps.sort()
+        for p in ps:
+            pth = os.path.join(root, params.split(' ')[0], p)
+            param = np.loadtxt(pth)
+            shape = param[:40]
+            exp = param[40:]
+            shapes.append(shape)
+            exps.append(exp)
+def geryparamtxt(fold):
+    fold_root = '/home/exp-10086/Project/Emotion-FAN-master/data/txt/CK+_10-fold_sample_IDascendorder_step10.txt'
+    fold_fp = open(fold_root)
+    lines = fold_fp.readlines()
+    start = 0
+    for lidx, l in enumerate(lines):
+        if l.__contains__(f'{fold}-fold'):
+            vn = l.split(' ')[1]
+            start = lidx
+            break
+        else:
+            continue
+    fold_lines = lines[start + 1:start + int(vn) + 1]
+    root = '/home/exp-10086/Project/ferdataset/ck_alpha_param'
+    with open(f'/home/exp-10086/Project/ferdataset/ck_alpha_param/param_{fold}.txt','a') as pf:
+        for params in fold_lines:
+            ps = os.listdir(os.path.join(root, params.split(' ')[0]))
+            ps.sort()
+            for p in ps:
+                pth = os.path.join(root, params.split(' ')[0], p)
+                param = np.loadtxt(pth)
+                shape = param[:40]
+                exp = param[40:]
+                shape = (shape - (-10307.826988220313)) / 78179.57736484919
+                exp = (exp - (-0.13336482156029097)) / 0.7782772432072191
+                np.savetxt(pf, np.hstack((shape,exp)))
+def checkseq():
+    path = '/home/exp-10086/Project/ferdataset/ourFace/seq/seq_1.txt'
+    a = np.loadtxt(path)
+    print(np.sum(a))
 if __name__ == '__main__':
-    testnumpyinsert()
+    # shapes, exps = [], []
+    # for fold in range(1,11):
+    #     geryparamtxt(fold)
+    # print(np.std(np.array(shapes)), np.mean(np.array(shapes)), np.std(np.array(exps)), np.mean(np.array(exps)))
+    checkseq()
     pass

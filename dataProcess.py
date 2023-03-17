@@ -13,12 +13,15 @@ import torch.utils.data as data
 from utils.pose import viz_pose
 from sklearn.decomposition import PCA
 import joblib
+from justGetModel import loadM
+from PIL import Image
+import torchvision.transforms as transforms
 ##################
 #global variables#
 ##################
 target = np.array([[16, 12], [31, 12]])  # eye position in 2d image, for now, fer2013 dataset which image size is 48*48
 target_fan = np.array([[75, 68], [150, 68]])  # like previous line , just image size is 224*224
-EOS = np.zeros((1, config['T_proj_dim']))  # padding of origin 3d lms data sequence
+EOS = np.zeros((1, config['T_input_dim']))  # padding of origin 3d lms data sequence
 AE_EOS = np.zeros((1, config['AE_mid_dim']))  # padding of AE mid feature sequence
 PE_EOS = np.zeros((1, config['T_input_dim']))
 standardImg = cv2.imread('./img.png')  # used to through 3DDFA net, then pointcloud produced by this picture will be a standard face pose. All face pose will be aligned to this face's pointcloud pose
@@ -40,15 +43,43 @@ class LSTMDataSet(data.Dataset):
             self.ps = pos_embed
     def __getitem__(self, idx):
         if self.vidx is not None and self.ps is None:
-            return self.input[idx], self.target[idx], self.vidx[idx]
+            return self.input[idx].cuda(), self.target[idx].cuda(), self.vidx[idx].cuda()
         elif self.ps is not None and self.vidx is None:
-            return self.input[idx], self.target[idx], self.ps[idx]
+            return self.input[idx].cuda(), self.target[idx].cuda(), self.ps[idx].cuda()
+            # return self.input[idx], self.target[idx], self.ps[idx]
         elif (self.ps is not None) and (self.vidx is not None):
-            return self.input[idx], self.target[idx], self.vidx[idx], self.ps[idx]
+            return self.input[idx].cuda(), self.target[idx].cuda(), self.vidx[idx].cuda(), self.ps[idx].cuda()
         else:
-            return self.input[idx], self.target[idx]
+            return self.input[idx].cuda(), self.target[idx].cuda()
     def __len__(self):
         return self.target.shape[0]
+
+class OFDataSet(data.Dataset):
+    def __init__(self,data_lst): # data_lst[(data_pth,label,video_index),(),...]
+        self.dataset = data_lst
+        self.FERm = loadM()
+        self.label_dic = {'Anger': 1, 'Disgust': 2, 'Fear': 3, 'Happy': 0, 'Normal': 5, 'Sad': 4, 'Surprised': 6,'Contempt':7}
+        self.transform = transforms.Compose([transforms.Resize(224), transforms.ToTensor()])
+    def __getitem__(self, item):
+        data_pth = self.dataset[item][0]
+        frames = os.listdir(data_pth)
+        frames.sort()
+        one_sample_fea = torch.zeros((0,512)).cuda()
+        for fr in frames:
+            # img = cv2.imread(os.path.join(data_pth,fr))
+            # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) # 原来就是rgb进入网络
+            # img = np.transpose(img, (2,1,0))
+            # img = img/255
+            img = Image.open(os.path.join(data_pth,fr)).convert('RGB')
+            img = self.transform(img)
+            with torch.no_grad():
+                frame_fea,_ = self.FERm(img[None,:,:,:].cuda(),phrase='eval')
+            one_sample_fea = torch.cat((one_sample_fea, frame_fea), dim=0)
+        label = torch.tensor(self.label_dic[self.dataset[item][1][:-1]] if self.dataset[item][1].__contains__('\n') else self.label_dic[self.dataset[item][1]])
+        vi = torch.tensor(self.dataset[item][2])
+        return one_sample_fea,label.cuda(),vi.cuda()
+    def __len__(self):
+        return len(self.dataset)
 class Utils():
 
     def __init__(self):
@@ -320,7 +351,7 @@ class Utils():
     def atomicityInsert(cls, ori_data):
         new_data = np.zeros((0, ori_data.shape[1]))
         # cpoy0 = int(config['Least_frame'] // ori_data.shape[0])
-        cpoy0 = 3
+        cpoy0 = 50 // ori_data.shape[0] + 1 # 暴力插值
         integration = np.tile(ori_data, (cpoy0, 1))
         for i in range(ori_data.shape[0]):
             for cp in range(cpoy0):
@@ -330,7 +361,7 @@ class Utils():
     @classmethod
     def inserCompeletely(cls, split: np, data_np: np):
         '''
-        不会再进行采样，只进行插值操作,且插值的视频具有原子性。all videos shorter than 20 frames will be atomicity inserted
+        不会再进行采样，只进行插值操作,且插值的视频具有原子性。all videos shorter than X frames will be atomicity inserted
         args:
             split: videos length
             data: lms+rgb
@@ -340,7 +371,7 @@ class Utils():
         new_data_lst = []
         for s in range(split.shape[0]):
             ori_data = data_np[start_idx:start_idx + int(split[s])].copy()
-            if split[s] < 9: # 95%
+            if split[s] < 0: # 95%
                 inserted = Utils.atomicityInsert(ori_data)
                 new_data_lst.append(inserted)
                 new_spilt.append(inserted.shape[0])
@@ -447,7 +478,7 @@ class Utils():
             pred_collection_m = pred_collection[m_m] # (sample number, 7)
             label_m = label[m_m] # pick data by video index
             pred_cls = torch.topk(pred_collection_m, 1, dim=1)[1] # index of classification prediction
-            table = torch.zeros((1,7)).cuda()
+            table = torch.zeros((1,config['T_output_dim'])).cuda()
             for pc in pred_cls:
                 table[0,pc]+=1
             most_pre = torch.topk(table, 1, dim=1)[0]
@@ -456,7 +487,7 @@ class Utils():
             if torch.sum(a.float()) > 1: # if prediction is not sole
                 indx = torch.nonzero(a).cuda()
                 for i in indx:
-                    vec = torch.zeros((1, 7)).cuda()
+                    vec = torch.zeros((1, config['T_output_dim'])).cuda()
                     for sidx, sb in enumerate(pred_cls):
                         if i[1] == sb[0]:
                             vec += pred_collection_m[sidx]
@@ -846,7 +877,7 @@ class Dataprocess():
                 redundancy_matrix = np.zeros((config['standBy'], config['window_size'])) # a matrix stand for redundancy and sequence length, (how many standby samples, sequence length)
                 for i in range(config['standBy']):
                     v_fs_shuffle = v_fs.copy()  # a cpoy for shuffle
-                    iind = random.sample([xx for xx in range(ori_video.shape[0]//2)],1)
+                    iind = random.sample([xx for xx in range(ori_video.shape[0]//3)],1)
                     temp = v_fs_shuffle[iind[0]:min(ori_video.shape[0]//5*3+iind[0],ori_video.shape[0])].copy()
                     np.random.shuffle(temp) # every standby sample will be generated from origin video shuffled again (frames,)
                     v_fs_shuffle[iind[0]:min(ori_video.shape[0]//5*3+iind[0],ori_video.shape[0])] = temp.copy()
@@ -896,8 +927,8 @@ class Dataprocess():
             # pcd = o3d.geometry.PointCloud()
             lms3d[f] = (lms3d[f]-m3d)/s3d
             # concatnate and align to ws -- video level
-            ori_video = feature[f]
-            # ori_video = np.hstack((lms3d[f], feature[f]))  # 1024
+            # ori_video = feature[f]
+            ori_video = np.hstack((lms3d[f], feature[f]))  # 1024
             # ori_video = lms3d[f]
             # samples_idx = Utils.ConstantSpeed(ori_video.shape[0])  # (sample num, length）
             samples_idx = np.array(([[-9,-8,-7,-6,-5,-4,-3,-2,-1]]))
@@ -909,11 +940,6 @@ class Dataprocess():
                     processed_v_s = np.concatenate((v_s, blanks), axis=0)
                 else:
                     processed_v_s = v_s.copy()
-                # if w == 2:
-                #     for pttth in range(6):
-                #         pcd.points = o3d.utility.Vector3dVector(v_s[pttth][:204].copy().reshape((68, 3)))
-                #         pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
-                #         o3d.visualization.draw_geometries([pcd])
                 data.append(processed_v_s)
                 target.append(label[f][0][0].astype(np.long))
                 if vote:
@@ -1043,13 +1069,13 @@ class Dataprocess():
 
         label_test = np.loadtxt(f'./dataset/label_fold{fold}_test.txt').reshape(-1, 1)
         test = np.loadtxt(f'./dataset/feature{fold}.txt')
-        test_pca = p_m.transform(test)  # pca decomposition
-        lms3d_test = np.loadtxt(f'./dataset/3dlms_fold{fold}_test.txt')
+        # test_pca = p_m.transform(test)  # pca decomposition
+        lms3d_test = np.loadtxt(f'/home/exp-10086/Project/ferdataset/ck_alpha_param/param_{fold}.txt')
         split_test = np.loadtxt(f'./dataset/split_{fold}_test.txt')
         if crop:
             test_seqs, test_l = Utils.inserCompeletely(split_test.astype(np.int_), label_test.astype(np.float32))
-            _, test_feature = Utils.inserCompeletely(split_test.astype(np.int_), test_pca.astype(np.float32))
-            _, test_lms3d = Utils.inserCompeletely(split_test.astype(np.int_), lms3d_test.astype(np.float32).reshape(-1, 204))
+            _, test_feature = Utils.inserCompeletely(split_test.astype(np.int_), test.astype(np.float32))
+            _, test_lms3d = Utils.inserCompeletely(split_test.astype(np.int_), lms3d_test.astype(np.float32).reshape(-1, 50))
             if peak_frame:
                 pos_embed_lst = []
                 for t_f in test_feature:
@@ -1063,7 +1089,7 @@ class Dataprocess():
             #         pcd.transform([[1,0,0,0],[0,-1,0,0],[0,0,1,0],[0,0,0,1]])
             #         vis.add_geometry(pcd)
             #         vis.poll_events()
-            #         vis.update_renderer()
+            #         vis.update_renderer()/
             return test_l, test_feature, test_lms3d, test_seqs
         else:
             return label_test, test, lms3d_test, split_test
@@ -1105,6 +1131,35 @@ class Dataprocess():
         test = np.loadtxt(f'./dataset/ft_feature{fold}.txt')
         _, test_feature = Utils.inserCompeletely(split_test.astype(np.int_), test.astype(np.float32))
         return test_l, test_3d_code, np.array(pos_embed_lst, dtype=object), test_feature
+
+    @classmethod
+    def loadSingleFoldOF(cls, fold, half = False):
+        lms3d_test = np.loadtxt(f'/home/exp-10086/Project/ferdataset/ourFace/lms3d/lms_{fold}.txt')
+        label_test = np.loadtxt(f'/home/exp-10086/Project/ferdataset/ourFace/label/label_{fold}.txt').reshape(-1, 1)
+        test = np.loadtxt(f'/home/exp-10086/Project/ferdataset/ourFace/rgbfeature/rgb_{fold}.txt')
+        split_test = np.loadtxt(f'/home/exp-10086/Project/ferdataset/ourFace/seq/seq_{fold}.txt')
+        if half:
+            start = 0
+            lms3d_test_h,label_test_h,test_h,split_test_h = np.zeros((0,204)),np.zeros((0,1)),np.zeros((0,512)),[]
+            for index,sp in enumerate(split_test):
+                sp = int(sp)
+                if index % 2 == 1: # train 0 test 1
+                    lms3d_test_h = np.concatenate((lms3d_test_h,lms3d_test[start:start+sp]), axis=0)
+                    label_test_h = np.concatenate((label_test_h,label_test[start:start+sp]), axis=0)
+                    test_h = np.concatenate((test_h,test[start:start+sp]),axis=0)
+                    split_test_h.append(sp)
+                start += sp
+            lms3d_test = np.array(lms3d_test_h)
+            label_test = np.array(label_test_h)
+            test = np.array(test_h)
+            split_test = np.array(split_test_h)
+        test_seqs, test_l = Utils.inserCompeletely(split_test.astype(np.int_), label_test.astype(np.float32))
+        _, test_feature = Utils.inserCompeletely(split_test.astype(np.int_), test.astype(np.float32))
+        _, test_lms3d = Utils.inserCompeletely(split_test.astype(np.int_), lms3d_test.astype(np.float32).reshape(-1, 204))
+        pos_embed_lst = []
+        for t_f in test_feature:
+            pos_embed_lst.append(Utils.SinusoidalEncoding(270, config['T_input_dim'])) # t_f.shape[0]
+        return test_l, test_feature, test_lms3d, test_seqs, np.array(pos_embed_lst, dtype=object)
     @classmethod
     def saveFacePicture(cls):
         import tqdm
@@ -1219,9 +1274,9 @@ class Dataprocess():
             # f_std = np.std(feature[f][:,:512], axis=1)
             # feature[f][:,:512] = (feature[f][:,:512] - f_mean.reshape(-1, 1)) / f_std.reshape(-1, 1)
 
-            l_mean = np.mean(lms3d[f], axis=1)
-            l_std = np.std(lms3d[f], axis=1)
-            lms3d[f] = (lms3d[f] - l_mean.reshape(-1, 1)) / l_std.reshape(-1, 1)
+            # l_mean = np.mean(lms3d[f], axis=1)
+            # l_std = np.std(lms3d[f], axis=1)
+            # lms3d[f] = (lms3d[f] - l_mean.reshape(-1, 1)) / l_std.reshape(-1, 1)
 
             # concatnate and align to ws -- video level
             # ori_video = np.hstack((feature[f][:,:512], lms3d[f]))
@@ -1243,12 +1298,12 @@ class Dataprocess():
                 redundancy_matrix = np.zeros((config['standBy'], config['window_size']))  # a matrix stand for redundancy and sequence length, (how many standby samples, sequence length)
                 for i in range(config['standBy']):
                     v_fs_shuffle = v_fs.copy()  # a cpoy for shuffle
-                    iind = random.sample([xx for xx in range(ori_video.shape[0] // 2)], 1)
-                    temp = v_fs_shuffle[iind[0]:min(ori_video.shape[0] // 5 * 3 + iind[0], ori_video.shape[0]-3)].copy()
+                    iind = random.sample([xx for xx in range(ori_video.shape[0] // 2)], 1) # 必要跨度的余数
+                    temp = v_fs_shuffle[iind[0]:min(ori_video.shape[0] // 5 * 3 + iind[0], ori_video.shape[0] - 3)].copy() # 伸缩性，保证必要跨度
                     np.random.shuffle(temp)  # every standby sample will be generated from origin video shuffled again (frames,)
-                    v_fs_shuffle[iind[0]:min(ori_video.shape[0] // 5 * 3 + iind[0], ori_video.shape[0]-3)] = temp.copy()
+                    v_fs_shuffle[iind[0]:min(ori_video.shape[0] // 5 * 3 + iind[0], ori_video.shape[0] - 3)] = temp.copy()
                     v_ix_copy = v_ix.copy()  # index copy
-                    v_ix_copy[v_fs_shuffle[iind[0]:config['window_size'] + iind[0]-3]] = 1  # code in inner bracket means a slicing operation on variable v_fs_shuffle, code in outer bracket means a mask operation.
+                    v_ix_copy[v_fs_shuffle[iind[0]:config['window_size']-3 + iind[0]]] = 1  # code in inner bracket means a slicing operation on variable v_fs_shuffle, code in outer bracket means a mask operation.
                     v_ix_copy[-3:]=1
                     redundancy_matrix[i] = v_fs[v_ix_copy.astype(int).astype(bool)]  # assignment
                 span = (redundancy_matrix.max(axis=1) - redundancy_matrix.min(axis=1))>= ori_video.shape[0]//2*1 # calulate the span of every standby sample, greater than some value will be selected as input sequence
@@ -1290,6 +1345,151 @@ class Dataprocess():
             else:
                 dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)).cuda(),
                                       torch.from_numpy(np.array(data, dtype=np.float32)).cuda())
+        dataloader = torch.utils.data.DataLoader(dataset, shuffle=config['Shuffle'], batch_size=config['batch_size'])
+        return dataloader
+
+    @classmethod
+    def ConvertVideo2SamplesIterVotes(cls, ws, feature, lms3d, label, vote: bool = True, pos_embed=None):
+        '''
+                    args:
+                        ws: window size, also known as sequence length
+                        feature: deep feature from imgages
+                        lms3d: 3D landmarks
+                        label: target data
+                    return:
+                        dataloader
+                '''
+        data = []
+        target = []
+        samples_counter_lst = []
+        pos_embeds = []
+        for f in range(0, feature.shape[0]):  # video level
+            # f_mean = np.mean(feature[f][:,:512], axis=1)
+            # f_std = np.std(feature[f][:,:512], axis=1)
+            # feature[f][:,:512] = (feature[f][:,:512] - f_mean.reshape(-1, 1)) / f_std.reshape(-1, 1)
+
+            l_mean = np.mean(lms3d[f], axis=1)
+            l_std = np.std(lms3d[f], axis=1)
+            lms3d[f] = (lms3d[f] - l_mean.reshape(-1, 1)) / l_std.reshape(-1, 1)
+
+            # concatnate and align to ws -- video level
+            # ori_video = np.hstack(feature[f][:,:512])
+            ori_video = np.hstack((lms3d[f], feature[f][:, :512]))
+            # ori_video = feature[f]
+            if ori_video.shape[0] < ws:
+                # EOS
+                EOS_num = ws - ori_video.shape[0]
+                blanks = np.tile(EOS, (EOS_num, 1))
+                video = np.concatenate((ori_video, blanks), axis=0)
+                data.append(video)
+                target.append(label[f][0][0])
+                if vote:
+                    samples_counter_lst.append(f)
+            else:
+                redundancy_matrix = np.zeros((0, config['window_size']))
+                iter = 0
+                ori_len = ori_video.shape[0]
+                while iter<300:
+                    start = random.sample([x for x in range(ori_len//5*2)], 1)[0]
+                    samplings = random.sample([x for x in range(start, min(start+ori_len//5*4, ori_len))], min(config['window_size'],ori_len-start,ori_len//5*4))
+                    if len(samplings)<50:
+                        iter += 1
+                        continue
+                    samplings.sort()
+                    if samplings[-1] - samplings[0] < ori_len//5*3:
+                        iter += 1
+                        continue
+                    if np.sum(np.all(redundancy_matrix == samplings,axis=1))>0:
+                        iter += 1
+                        continue
+                    redundancy_matrix = np.concatenate((redundancy_matrix, np.array(samplings.copy()).reshape(1,-1)),axis=0)
+                    if redundancy_matrix.shape[0] == config['standBy']:
+                        break
+                    iter += 1
+                span = (redundancy_matrix.max(axis=1) - redundancy_matrix.min(axis=1)) >= ori_video.shape[0] // 3*2
+                if np.sum(span != 0) >= config['selected']:  # number of qualified sample might be greater than we want, so if true, just select top 20 samples.
+                    samples = redundancy_matrix[span, :][:config['selected']]
+                else:  # if not, take as many as possible
+                    samples = redundancy_matrix[:config['selected']]
+                for w in range(samples.shape[0]):
+                    data.append(ori_video[list(samples[w].astype(int))])
+                    target.append(label[f][0][0].astype(np.long))
+                    if vote:
+                        samples_counter_lst.append(f)
+                    if pos_embed is not None:
+                        pe_p = pos_embed[f][list(samples[w].astype(int))]
+                        if pe_p.shape[0] < ws:
+                            EOS_num = ws - pe_p.shape[0]
+                            blanks = np.tile(PE_EOS, (EOS_num, 1))
+                            processed_pe = np.concatenate((pe_p, blanks), axis=0)
+                        else:
+                            processed_pe = pe_p.copy()
+                        pos_embeds.append(processed_pe)
+        # dataset and dataloader !!! x,y 是必须的，有无voting和有无fixed peak frame position变成了4个情况。
+        if vote:  # 用于test
+            if pos_embed is not None:  # 用于peak frame fixed position encoding
+                dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)),
+                                      torch.from_numpy(np.array(data, dtype=np.float32)),
+                                      torch.from_numpy(np.array(samples_counter_lst, dtype=np.float32)),
+                                      torch.from_numpy(np.array(pos_embeds, dtype=np.float32)))
+            else:
+                dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)),
+                                      torch.from_numpy(np.array(data, dtype=np.float32)),
+                                      torch.from_numpy(np.array(samples_counter_lst, dtype=np.float32)))
+        else:
+            if pos_embed is not None:
+                dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)),
+                                      torch.from_numpy(np.array(data, dtype=np.float32)),
+                                      None,
+                                      torch.from_numpy(np.array(pos_embeds, dtype=np.float32)))
+            else:
+                dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)),
+                                      torch.from_numpy(np.array(data, dtype=np.float32)))
+        dataloader = torch.utils.data.DataLoader(dataset, shuffle=config['Shuffle'], batch_size=config['batch_size'])
+        return dataloader
+
+    @classmethod
+    def VideoNaive(cls,ws,feature,lms3d,label,vote: bool = True, pos_embed=None):
+        data = []
+        target = []
+        samples_counter_lst = []
+        pos_embeds = []
+        for f in range(0, feature.shape[0]):  # video level maxlength = 270
+            l_mean = np.mean(lms3d[f], axis=1)
+            l_std = np.std(lms3d[f], axis=1)
+            lms3d[f] = (lms3d[f] - l_mean.reshape(-1, 1)) / l_std.reshape(-1, 1)
+            ori_video = np.hstack((lms3d[f], feature[f][:, :512]))
+            # ori_video = feature[f]
+            if ori_video.shape[0] < ws:
+                # EOS
+                EOS_num = ws - ori_video.shape[0]
+                blanks = np.tile(EOS, (EOS_num, 1))
+                video = np.concatenate((ori_video, blanks), axis=0)
+                data.append(video)
+            else:
+                data.append(ori_video)
+            target.append(label[f][0][0])
+
+        # dataset and dataloader !!! x,y 是必须的，有无voting和有无fixed peak frame position变成了4个情况。
+        if vote:  # 用于test
+            if pos_embed is not None:  # 用于peak frame fixed position encoding
+                dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)),
+                                      torch.from_numpy(np.array(data, dtype=np.float32)),
+                                      torch.from_numpy(np.array(samples_counter_lst, dtype=np.float32)),
+                                      torch.from_numpy(np.array(pos_embeds, dtype=np.float32)))
+            else:
+                dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)),
+                                      torch.from_numpy(np.array(data, dtype=np.float32)),
+                                      torch.from_numpy(np.array(samples_counter_lst, dtype=np.float32)))
+        else:
+            if pos_embed is not None:
+                dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)),
+                                      torch.from_numpy(np.array(data, dtype=np.float32)),
+                                      None,
+                                      torch.from_numpy(np.array(pos_embeds, dtype=np.float32)))
+            else:
+                dataset = LSTMDataSet(torch.from_numpy(np.array(target, dtype=np.float32)),
+                                      torch.from_numpy(np.array(data, dtype=np.float32)))
         dataloader = torch.utils.data.DataLoader(dataset, shuffle=config['Shuffle'], batch_size=config['batch_size'])
         return dataloader
     @classmethod
@@ -1373,6 +1573,108 @@ class Dataprocess():
                     # with open(f'./dataset/label_fold{test_fold}_train.txt', 'ab') as nl:
                     #     np.savetxt(nl, np_label)
                 # Utils.aggregateFeaAndCode(fi_lst, alphi_lst, split_train, 0, 'train')
+    @classmethod
+    def loadFERModelIntoDataloader(cls, fold, mode):
+        '''
+        Args:
+            fold: 哪一个fold用于测试
+        Returns:
+            dataloader
+        '''
+        txt_root = '/home/exp-10086/Project/Emotion-FAN-master/data/txt/OF_5-fold_sample_IDascendorder_step5.txt'
+        txt_lines = open(txt_root).readlines()
+        OF_video_root = '/home/exp-10086/Project/ferdataset/ourFace/samples_len50'
+        data_lst = []
+        # 删了被测试的fold
+        for tlidx, tl in enumerate(txt_lines):
+            if tl.startswith(f'{fold}-fold'):
+                fold_number = tl.split(' ')[1]
+                # 如果是10fold测试 del的index还需要改一下
+                if mode == 'train':
+                    del txt_lines[tlidx:tlidx+int(fold_number)+1]
+                else:
+                    txt_lines = txt_lines[tlidx:tlidx+int(fold_number)+1]
+                break
+        for belongto,trainl in enumerate(txt_lines):
+            if trainl.__contains__('fold') or trainl.startswith('\n'):
+                continue
+            sub_pth = trainl.split(' ')[0]
+            video_label = trainl.split(' ')[1]
+            one_video_pth = os.path.join(OF_video_root,sub_pth)
+            sample_numbers = len(os.listdir(one_video_pth))
+            for sn in range(1):
+                one_sample_pth = os.path.join(one_video_pth, sn.__str__())
+                data_lst.append((one_sample_pth,video_label,belongto))
+        datasets = OFDataSet(data_lst)
+        dataloader = torch.utils.data.DataLoader(datasets, shuffle=False, batch_size=config['batch_size'])
+        return dataloader
+    @classmethod
+    def saveSamplesInSSD(cls):
+        import shutil
+        txt_root = '/home/exp-10086/Project/Emotion-FAN-master/data/txt/OF_5-fold_sample_IDascendorder_step5.txt'
+        txt_lines = open(txt_root).readlines()
+        OF_video_root = '/home/exp-10086/Project/ferdataset/ourFace/voteLabel/'
+        samples_root = '/home/exp-10086/Project/ferdataset/ourFace/samples_len50'
+        data_lst = []
+        # 删了被测试的fold
+        for tlidx, tl in enumerate(txt_lines):
+            print(tl)
+            if tl.__contains__(f'-fold') or tl.startswith('\n'):
+                continue
+            # if not tl.startswith('Fear/434'):
+            #     continue
+            sub_pth = tl.split(' ')[0]
+            one_video_pth = os.path.join(OF_video_root, sub_pth)
+            one_video_frames = os.listdir(one_video_pth)
+            one_video_frames.sort(key=lambda x: int(x[:-4]))
+            # 开始采样
+            redundancy_matrix = np.zeros((0, config['window_size']))
+            iter = 0
+            ori_len = len(one_video_frames)
+            copy = 50 // ori_len + 1
+            inserted_one_video_frames = []
+            for of in one_video_frames:
+                addZeros = 8 - len(of)
+                if copy > 0:
+                    for c in range(copy):
+                        fixof = f'{addZeros * "0"}{of[:-4]}_{c}.jpg'
+                        inserted_one_video_frames.append(fixof)
+                else:
+                    fixof = f'{addZeros * "0"}{of[:-4]}_0.jpg'
+                    inserted_one_video_frames.append(fixof)
+            inserted_len = len(inserted_one_video_frames)
+            while iter < 300:
+                start = random.sample([x for x in range(inserted_len-50)], 1)[0]
+                samplings = random.sample([x for x in range(start, inserted_len)], config['window_size'])
+                if len(samplings) < 50:
+                    iter += 1
+                    continue
+                samplings.sort()
+                if samplings[-1] - samplings[0] < inserted_len // 3*2:
+                    iter += 1
+                    continue
+                if redundancy_matrix.shape[0] > 0:
+                    if np.sum(np.all(redundancy_matrix == samplings,axis=1)) > 0:
+                        iter += 1
+                        continue
+                redundancy_matrix = np.concatenate((redundancy_matrix, np.array(samplings.copy()).reshape(1, -1)),axis=0)
+                if redundancy_matrix.shape[0] == config['selected']:
+                    break
+                iter += 1
+            for si,r in enumerate(redundancy_matrix):
+                indexed_frames = []
+                for rr in r:
+                    indexed_frames.append(inserted_one_video_frames[rr.astype(int)])
+                for idxf in indexed_frames:
+                    save_pth = os.path.join(samples_root,sub_pth,si.__str__(),idxf)
+                    src_fn = idxf[:-4].split('_')[0]
+                    src_fn = f'{src_fn.lstrip("0")}.jpg'
+                    src_pth = os.path.join(OF_video_root,sub_pth,src_fn)
+                    if not os.path.exists(os.path.join(samples_root,sub_pth,si.__str__())):
+                        os.makedirs(os.path.join(samples_root,sub_pth,si.__str__()))
+                    shutil.copy(src_pth, save_pth)
+
+
 if __name__ == '__main__':
     # 删除所有.DS_Store文件
     # Dataprocess.deleleDS_Store()
@@ -1421,4 +1723,7 @@ if __name__ == '__main__':
     # Dataprocess.rgbPatchFea()
     # Dataprocess.pretrainDataProcess()
     # Dataprocess.readAndLoadSingleFold(1, True)
+    dl = Dataprocess.loadFERModelIntoDataloader(1)
+    for fea,label,attribution in dl:
+        print()
     pass

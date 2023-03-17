@@ -59,7 +59,7 @@ class LSTMModel(BaseModel):
 
     def __init__(self, inputDim, hiddenNum, outputDim, layerNum, cell, use_cuda, feature_dim=1):
         super(LSTMModel, self).__init__(inputDim, hiddenNum, outputDim, layerNum, cell, use_cuda)
-        self.input2feature = nn.Sequential(nn.Linear(inputDim, 128), nn.ReLU(), nn.Linear(128, feature_dim), nn.ReLU())
+        self.input2feature = nn.Sequential(nn.Linear(inputDim, 512), nn.ReLU(), nn.Linear(512, feature_dim), nn.ReLU())
         self.alpha = nn.Sequential(nn.Linear(feature_dim, 1), nn.Sigmoid())  # act on single frame
         self.beta = nn.Sequential(nn.Linear(feature_dim + hiddenNum, 1), nn.Sigmoid())  # act on single sample
         self.lastL = nn.Linear(feature_dim + hiddenNum, outputDim)
@@ -86,7 +86,23 @@ class LSTMModel(BaseModel):
         output = self.lastL(features)
         return output
 
+class ORILSTM(BaseModel):
 
+    def __init__(self, inputDim, hiddenNum, outputDim, layerNum, cell, use_cuda):
+        super(ORILSTM, self).__init__(inputDim, hiddenNum, outputDim, layerNum, cell, use_cuda)
+    def forward(self, x):
+
+        batchSize = x.size(0)
+        h0 = Variable(torch.zeros(self.layerNum * 1, batchSize, self.hiddenNum))
+        c0 = Variable(torch.zeros(self.layerNum * 1, batchSize, self.hiddenNum))
+        if self.use_cuda:
+            h0 = h0.cuda()
+            c0 = c0.cuda()
+        rnnOutput, hn = self.cell(x, (h0, c0))
+        hn = hn[0].view(batchSize, self.hiddenNum)
+        fcOutput = self.fc(hn)
+
+        return fcOutput
 class BasicBlock(nn.Module):
     expansion = 1
 
@@ -555,14 +571,16 @@ class MAEEncoder(nn.Module):
 
 class NormalB16ViT(timm.models.vision_transformer.VisionTransformer):
     def __init__(self,weights):
+        # super().__init__(embed_dim=1280,num_heads=16,patch_size=14) # h-14的设置
         super().__init__()
         if weights is not None:
             self.load_from(weights)
         else:
             pass
-        self.emb_proj = nn.Linear(config['T_proj_dim'],self.embed_dim) # 1024->768
+        # self.lms_porj = nn.Linear(204, 256)
+        self.emb_proj = nn.Linear(config['T_input_dim'],self.embed_dim) # 1024->768
         self.pos_embed_my = nn.Parameter(torch.zeros(1, config['window_size']+1, self.embed_dim))
-        self.pos_embed_my.data.copy_(self.pos_embed[:,:config['window_size']+1,:]) # cut position embedding
+        # self.pos_embed_my.data.copy_(self.pos_embed[:,:config['window_size']+1,:]) # cut position embedding
         self.pred = nn.Linear(self.embed_dim,config['T_output_dim'])
         pass
 
@@ -607,12 +625,17 @@ class NormalB16ViT(timm.models.vision_transformer.VisionTransformer):
         return torch.FloatTensor(pos_table)
 
     def forward(self, x, position_embeddings=None):
+        # x_l = x[:,:,:204]
+        # x_r = x[:,:,204:]
+        # x_l = self.lms_porj(x_l)
+        # x = torch.cat((x_l,x_r),dim=2)
         x = self.emb_proj(x)
         if position_embeddings is None:
             x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x),dim=1) + self.pos_embed_my
         else:
             cls_token_pe = torch.tile(self.SinusoidalEncoding(1,self.embed_dim),(x.shape[0],1)).cuda()
-            x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1) + torch.concatenate((cls_token_pe[:,None,:], position_embeddings),dim=1)
+            position_embeddings = torch.from_numpy(position_embeddings).cuda()
+            x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1) + torch.concatenate((cls_token_pe[:, None, :], position_embeddings.expand(x.shape[0], -1, -1)),dim=1)
         #x(b,s,d)
         x = self.norm_pre(x)
         x = self.blocks(x)
