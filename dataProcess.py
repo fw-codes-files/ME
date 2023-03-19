@@ -1598,8 +1598,9 @@ class Dataprocess():
         for belongto,trainl in enumerate(txt_lines):
             if trainl.__contains__('fold') or trainl.startswith('\n'):
                 continue
-            if (belongto-1) % 5 !=0:
-                continue
+            if mode != 'train':
+                if (belongto-1) % 5 !=0:
+                    continue
             attri = belongto+(fold-1)*150
             sub_pth = trainl.split(' ')[0]
             video_label = trainl.split(' ')[1]

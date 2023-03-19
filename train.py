@@ -1104,11 +1104,48 @@ class Two_tsm_train():
                                        'state_dict': nv.state_dict()}
                         torch.save(checkpoints, f'/home/exp-10086/Project/ferdataset/ourFace/vit/{i}test_{e+1}_{itt+1}.pkl')
                     itt += 1
-
+    @classmethod
+    def B16_AB(cls):
+        from model import NormalB16ViT
+        from torch.utils.tensorboard import SummaryWriter
+        from dataProcess import Utils
+        loss_func = torch.nn.CrossEntropyLoss()
+        pos_encoding = Utils.SinusoidalEncoding(270, config['T_proj_dim'])
+        for i in range(1, 2):
+            nv = NormalB16ViT(None)
+            nv.cuda()
+            nv.train()
+            optimizer = torch.optim.AdamW(nv.parameters(), lr=1e-3, betas=(0.9, 0.95))
+            train_dataloader = Dataprocess.loadFERModelIntoDataloader(i,'train')
+            writer_loss = SummaryWriter(f'./tb/loss/B16_AB_WholeV/{i}/')
+            writer_acc_train = SummaryWriter(f'./tb/acc/B16_AB_WholeV/{i}/')
+            for e in range(config['epoch']):
+                score, total = 0, 0
+                for input, target in train_dataloader:
+                    optimizer.zero_grad()
+                    pred = nv(input, pos_encoding)
+                    loss = loss_func(pred, target.long())
+                    loss.backward()
+                    optimizer.step()
+                    idx_pred = torch.topk(pred, 1, dim=1)[1]
+                    rs = idx_pred.eq(target.reshape(-1, 1))
+                    score += rs.view(-1).float().sum()
+                    total += input.shape[0]
+                    sacal_loss = loss.detach().cpu()
+                writer_loss.add_scalar(f'train loss', sacal_loss, e)
+                writer_acc_train.add_scalar('train acc', score / total * 100, e)
+                print('\r' + f'fold {i} epoch:{e} loss:{loss} acc:{score / total * 100}% lr:{optimizer.param_groups[0]["lr"]} ',end='', flush=True)
+                if (e + 1) % 1 == 0:
+                    checkpoints = {'model_type': 'ViT',
+                                   'epoch': e + 1,
+                                   'optim': optimizer.state_dict(),
+                                   'state_dict': nv.state_dict()}
+                    torch.save(checkpoints, f'/home/exp-10086/Project/ferdataset/ourFace/vit/{i}test_{e + 1}.pkl')
+            logging.info(f'------------------------------------train ends, train folds:{i}-----------------------------------------------')
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='train function choice')
-    parser.add_argument('-M', default='AB', type=str, metavar='N',
+    parser.add_argument('-M', default='B16_AB', type=str, metavar='N',
                         help='s means single and m means minibatch')
     args = parser.parse_args()
     if args.M == 'single': # lstm train with bs=1
@@ -1147,5 +1184,7 @@ def main():
         Two_tsm_train.B16Vit_NoMidData(config['epoch'])
     elif args.M == 'AB':
         LSTM_model_traintest.lstmAB()
+    elif args.M == 'B16_AB':
+        Two_tsm_train.B16_AB()
 if __name__ == '__main__':
     main()

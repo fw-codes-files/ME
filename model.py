@@ -11,11 +11,8 @@ import math
 import yaml
 
 config = yaml.safe_load(open('./config.yaml', encoding='utf-8'))
-
-
 # RNNs模型基类，主要是用于指定参数和cell类型
 class BaseModel(nn.Module):
-
     def __init__(self, inputDim, hiddenNum, outputDim, layerNum, cell, use_cuda=False):
 
         super(BaseModel, self).__init__()
@@ -34,8 +31,6 @@ class BaseModel(nn.Module):
                                 batch_first=True, )
 
         self.fc = nn.Linear(1024, self.outputDim)
-
-
 # 标准RNN模型
 class RNNModel(BaseModel):
 
@@ -146,8 +141,6 @@ class BasicBlock(nn.Module):
         out += self.shortcut(x)
         out = F.relu(out)
         return out
-
-
 class Bottleneck(nn.Module):
     expansion = 4
 
@@ -177,8 +170,6 @@ class Bottleneck(nn.Module):
         out += self.shortcut(x)
         out = F.relu(out)
         return out
-
-
 class ResNet(nn.Module):
     def __init__(self, block, num_blocks, num_classes=7):
         super(ResNet, self).__init__()
@@ -211,18 +202,12 @@ class ResNet(nn.Module):
         out = out.view(out.size(0), -1)
         # out = self.linear(out)
         return out
-
-
 def ResNet18():
     return ResNet(BasicBlock, [2, 2, 2, 2])
-
-
 def conv3x3(in_planes, out_planes, stride=1):
     "3x3 convolution with padding"
     return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
                      padding=1, bias=False)
-
-
 class BasicBlock_AT(nn.Module):
     expansion = 1
 
@@ -253,8 +238,6 @@ class BasicBlock_AT(nn.Module):
         out = self.relu(out)
 
         return out
-
-
 class ResNet_AT(nn.Module):
     def __init__(self, block, layers, num_classes=1000, end2end=True, at_type=''):
         self.inplanes = 64
@@ -394,17 +377,11 @@ class ResNet_AT(nn.Module):
                     pred_score = self.pred_fc1(self.dropout(vm))
 
                 return pred_score
-
-
 ''' self-attention; relation-attention '''
-
-
 def resnet18_at(pretrained=False, **kwargs):
     # Constructs base a ResNet-18 model.
     model = ResNet_AT(BasicBlock_AT, [2, 2, 2, 2], **kwargs)
     return model
-
-
 class EmoTransformer(nn.Module):
     def __init__(self, input, nhead, num_layers, batch_first, output_dim):  # bs first True
         '''
@@ -455,8 +432,6 @@ class EmoTransformer(nn.Module):
         if phrase == 'mlpIn':
             output = self.pred(v_s) # (video, 7)
             return output
-
-
 class AutoEncoder(nn.Module):
     def __init__(self):
         super(AutoEncoder, self).__init__()
@@ -471,8 +446,6 @@ class AutoEncoder(nn.Module):
             return mid
         output = self.AE_decoder(mid)
         return output
-
-
 class ViLT(nn.Module):
     def __init__(self, model_type_num: int, lms_type_dim: int, rgb_type_dim: int, d_model: int, nhead: int,
                  forward_dim: int, block_num: int, batch_fist: bool):
@@ -499,7 +472,6 @@ class ViLT(nn.Module):
         output_emb = self.encoder(input_emb)
         pred = self.MLP(output_emb[:, 0, :])
         return pred
-
 class MultiEmoTransformer(nn.Module):
     def __init__(self,lms3dpro, rgbpro, input, nhead, num_layers, batch_first, output_dim):  # bs first True
         '''
@@ -544,7 +516,6 @@ class MultiEmoTransformer(nn.Module):
             x_ = self.transformer_encoder(cls_x)
         v_feature = x_[:, 0, :]  # (bs,1,d_model)
         return self.pred(v_feature)
-
 from utils.config import cfg
 class MAEEncoder(nn.Module):
     def __init__(self, embed_dim=1024, depth=24, num_heads=16,
@@ -584,7 +555,6 @@ class MAEEncoder(nn.Module):
         for blk in self.blocks:
             x = blk(x)
         return self.pred(x[:,0,:])
-
 class NormalB16ViT(timm.models.vision_transformer.VisionTransformer):
     def __init__(self,weights):
         # super().__init__(embed_dim=1280,num_heads=16,patch_size=14) # h-14的设置
@@ -657,4 +627,75 @@ class NormalB16ViT(timm.models.vision_transformer.VisionTransformer):
         x = self.blocks(x)
         x = self.norm(x)
         pred = self.pred(x[:,0,:])
+        return pred
+class B16ViT_AB(timm.models.vision_transformer.VisionTransformer):
+    def __init__(self,weights):
+        # super().__init__(embed_dim=1280,num_heads=16,patch_size=14) # h-14的设置
+        super().__init__()
+        if weights is not None:
+            self.load_from(weights)
+        else:
+            pass
+        self.sig = nn.Sigmoid()
+        self.beta = nn.Sequential(nn.Linear(config['T_input_dim']*2,1),nn.Sigmoid())
+        self.emb_proj = nn.Linear(config['T_input_dim'],self.embed_dim) # 1024->768
+        self.pos_embed_my = nn.Parameter(torch.zeros(1, config['window_size']+1, self.embed_dim))
+        self.pred = nn.Linear(self.embed_dim,config['T_output_dim'])
+        pass
+    @torch.no_grad()
+    def load_from(self, weights):
+        def _n2p(w, t=True):
+            if w.ndim == 4 and w.shape[0] == w.shape[1] == w.shape[2] == 1:
+                w = w.flatten()
+            if t:
+                if w.ndim == 4:
+                    w = w.transpose([3, 2, 0, 1])
+                elif w.ndim == 3:
+                    w = w.transpose([2, 0, 1])
+                elif w.ndim == 2:
+                    w = w.transpose([1, 0])
+            return torch.from_numpy(w)
+        self.pos_embed.data.copy_(torch.from_numpy(weights['Transformer/posembed_input/pos_embedding']))
+        self.cls_token.data.copy_(torch.from_numpy(weights['cls']))
+        for l,b in enumerate(self.blocks):
+            ################ln weight######################
+            b.norm1.bias.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/LayerNorm_0/bias']))
+            b.norm1.weight.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/LayerNorm_0/scale']))
+            b.norm2.bias.data.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/LayerNorm_2/bias']))
+            b.norm2.weight.data.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/LayerNorm_2/scale']))
+            ###############mlp weight######################
+            b.mlp.fc1.weight.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/MlpBlock_3/Dense_0/kernel']).t())
+            b.mlp.fc1.bias.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/MlpBlock_3/Dense_0/bias']).t())
+            b.mlp.fc2.weight.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/MlpBlock_3/Dense_1/kernel']).t())
+            b.mlp.fc2.bias.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/MlpBlock_3/Dense_1/bias']).t())
+            ###############attention weight################
+            b.attn.qkv.weight.copy_(torch.cat([_n2p(weights[f'Transformer/encoderblock_{l}/MultiHeadDotProductAttention_1/{n}/kernel'], t=False).flatten(1).T for n in ('query', 'key', 'value')]))
+            b.attn.qkv.bias.copy_(torch.cat([_n2p(weights[f'Transformer/encoderblock_{l}/MultiHeadDotProductAttention_1/{n}/bias'], t=False).reshape(-1) for n in ('query', 'key', 'value')]))
+            b.attn.proj.weight.copy_(_n2p(weights[f'Transformer/encoderblock_{l}/MultiHeadDotProductAttention_1/out/kernel']).flatten(1))
+            b.attn.proj.bias.copy_(_n2p(weights[f'Transformer/encoderblock_{l}/MultiHeadDotProductAttention_1/out/bias']))
+    @torch.no_grad()
+    def SinusoidalEncoding(self, seq_len, d_model):
+        pos_table = np.array([
+            [pos / np.power(10000, 2 * i / d_model) for i in range(d_model)]
+            for pos in range(seq_len)])
+        pos_table[0, 0::2] = np.sin(pos_table[0, 0::2])
+        pos_table[0, 1::2] = np.cos(pos_table[0, 1::2])
+        return torch.FloatTensor(pos_table)
+    def forward(self, rgb_fea, position_embeddings=None):
+        x0 = self.emb_proj(rgb_fea)
+        alphas = self.sig(x0)
+        if position_embeddings is None:
+            x = torch.cat((self.cls_token.expand(x0.shape[0], -1, -1), x0),dim=1) + self.pos_embed_my
+        else:
+            cls_token_pe = torch.tile(self.SinusoidalEncoding(1,self.embed_dim),(x0.shape[0],1)).cuda()
+            position_embeddings = torch.from_numpy(position_embeddings).cuda()
+            x = torch.cat((self.cls_token.expand(x0.shape[0], -1, -1), x0), dim=1) + torch.concatenate((cls_token_pe[:, None, :], position_embeddings.expand(x0.shape[0], -1, -1)),dim=1)
+        x = self.norm_pre(x)
+        x = self.blocks(x)
+        x = self.norm(x)
+        v_fea = x[:,0,:]
+        sum_fea = torch.cat((x0, v_fea.repeat(1, 50, 1)), dim=2)
+        betas = self.beta(sum_fea)
+        hx = torch.mul(sum_fea, alphas * betas).sum(1) / torch.sum(alphas * betas, dim=1)
+        pred = self.pred(hx)
         return pred
