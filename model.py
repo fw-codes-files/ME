@@ -33,7 +33,7 @@ class BaseModel(nn.Module):
                                 num_layers=self.layerNum, dropout=0.0,
                                 batch_first=True, )
 
-        self.fc = nn.Linear(self.hiddenNum, self.outputDim)
+        self.fc = nn.Linear(1024, self.outputDim)
 
 
 # 标准RNN模型
@@ -52,8 +52,6 @@ class RNNModel(BaseModel):
         fcOutput = self.fc(hn)
 
         return fcOutput
-
-
 # LSTM模型
 class LSTMModel(BaseModel):
 
@@ -85,7 +83,6 @@ class LSTMModel(BaseModel):
         features = weighted_sum / torch.sum(alpha_betas, dim=1)  # (bs, hiddenNum + inputDim)
         output = self.lastL(features)
         return output
-
 class ORILSTM(BaseModel):
 
     def __init__(self, inputDim, hiddenNum, outputDim, layerNum, cell, use_cuda):
@@ -102,6 +99,26 @@ class ORILSTM(BaseModel):
         hn = hn[0].view(batchSize, self.hiddenNum)
         fcOutput = self.fc(hn)
 
+        return fcOutput
+class FollowLSTM(BaseModel):
+    def __init__(self, inputDim, hiddenNum, outputDim, layerNum, cell, use_cuda):
+        super(FollowLSTM, self).__init__(inputDim, hiddenNum, outputDim, layerNum, cell, use_cuda)
+        self.alpha = nn.Sequential(nn.Linear(512,1),nn.Sigmoid())
+        self.beta = nn.Sequential(nn.Linear(1024,1),nn.Sigmoid())
+    def forward(self, x ):
+        alphas = self.alpha(x)
+        batchSize = x.size(0)
+        h0 = Variable(torch.zeros(self.layerNum * 1, batchSize, self.hiddenNum))
+        c0 = Variable(torch.zeros(self.layerNum * 1, batchSize, self.hiddenNum))
+        if self.use_cuda:
+            h0 = h0.cuda()
+            c0 = c0.cuda()
+        rnnOutput, hn = self.cell(x, (h0, c0))
+        hn = hn[0].view(batchSize, self.hiddenNum)
+        hx = torch.cat((x,hn[:,None,:].repeat(1,50,1)),dim=2)
+        betas = self.beta(hx)
+        hx = torch.mul(hx,alphas*betas).sum(1)/torch.sum(alphas*betas,dim=1)
+        fcOutput = self.fc(hx)
         return fcOutput
 class BasicBlock(nn.Module):
     expansion = 1
@@ -567,7 +584,6 @@ class MAEEncoder(nn.Module):
         for blk in self.blocks:
             x = blk(x)
         return self.pred(x[:,0,:])
-
 
 class NormalB16ViT(timm.models.vision_transformer.VisionTransformer):
     def __init__(self,weights):

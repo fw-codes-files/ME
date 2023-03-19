@@ -1,4 +1,7 @@
 import os
+
+import tqdm
+
 os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 import torch.nn
@@ -308,6 +311,53 @@ class Modeltest(object):
                     print('epoch:',checkpoint['epoch'],(score5 / total5+score6/total6).item()/2," ",(vote_acc6+vote_acc5)/2)
 
     @classmethod
+    def testlstmAB(cls, fold):
+        from model import FollowLSTM
+        from train import config
+        from dataProcess import Dataprocess
+        import torch
+        import os
+        logging.basicConfig(format='%(asctime)s - %(filename)s[line:%(lineno)d] - %(levwuelname)s: %(message)s',
+                            level=logging.INFO,
+                            filename=config['LOG_pth'],
+                            filemode='a')
+        trans = FollowLSTM(inputDim=config['LSTM_input_dim'], hiddenNum=config['LSTM_hidden_dim'],
+                           outputDim=config['LSTM_output_dim'], layerNum=config['LSTM_layerNum'],
+                           cell=config['LSTM_cell'], use_cuda=config['use_cuda'])
+        trans.cuda()
+        trans.eval()
+        writer_acc_val = SummaryWriter(f'./tb/acc/test4pick/pretrain/lstm_OF')
+        writer_acc_vote = SummaryWriter(f'./tb/acc/test4pick/vote/lstm_OF')
+        for cp in range(1, 20):  # 1test_0.pkl 2test_0.pkl ...
+            score10, total10, vote_acc10 = 0, 0, 0
+            pred_lst, label_lst, belong_lst = [], [], []
+            for fo in fold:
+                after = True
+                if not os.path.exists(os.path.join(config['checkpoint_pth'], f'{fo}test_{cp}.pkl')):
+                    after = False
+                    continue
+                checkpoint = torch.load(os.path.join(config['checkpoint_pth'], f'{fo}test_{cp}.pkl'))
+                trans.load_state_dict(checkpoint['state_dict'])
+                val_dataloader = Dataprocess.loadFERModelIntoDataloader(fo, 'test')
+                for input, target, attribution in tqdm.tqdm(val_dataloader):  # attribution
+                    with torch.no_grad():
+                        pred = trans(input)
+                    pred = cls.softmax(pred)
+                    i_mask = pred.max(dim=1)[0] > torch.tensor([0.7] * input.shape[0]).cuda()
+                    pred_lst.append(pred[i_mask])
+                    label_lst.append(target[i_mask])
+                    belong_lst.append(attribution[i_mask])
+                    idx_pred = torch.topk(pred, 1, dim=1)[1]
+                    rs = idx_pred.eq(target.reshape(-1, 1))
+                    score10 += rs.view(-1).float().sum()
+                    total10 += input.shape[0]
+                    print('current acc', score10 / total10)
+            if after:
+                vote_acc10 += dataProcess.Utils.vote(pred_lst, belong_lst, label_lst)
+                writer_acc_val.add_scalar('test avg acc', score10 / total10 * 100, cp)
+                writer_acc_vote.add_scalar('test vote acc', vote_acc10 * 100, cp)
+                print('acc ', score10 / total10, 'vote', vote_acc10)
+    @classmethod
     def testCheck(cls,fold):
         from model import NormalB16ViT
         from train import config
@@ -323,17 +373,21 @@ class Modeltest(object):
         trans.cuda()
         trans.eval()
         writer_acc_val = SummaryWriter(f'./tb/acc/test4pick/pretrain/B16_OF')
+        writer_acc_vote = SummaryWriter(f'./tb/acc/test4pick/vote/B16_OF')
         pos_encoding = Utils.SinusoidalEncoding(50, config['T_proj_dim'])
-        val_dataloader = Dataprocess.loadFERModelIntoDataloader(1,'test')
-        for cp in range(91,500,2):  # 1test_0.pkl 2test_0.pkl ...
-            if type(fold) is list:
+        for cp in range(3, 19):  # 1test_0.pkl 2test_0.pkl ...
+            for iter in range(10,2500,10):
                 score10, total10, vote_acc10 = 0, 0, 0
+                pred_lst, label_lst, belong_lst = [], [], []
                 for fo in fold:
-                    checkpoint = torch.load(os.path.join(config['checkpoint_pth'], f'{1}test_{cp}.pkl'))
-                    print(f'{1}test_{cp}.pkl')
+                    after = True
+                    if not os.path.exists(os.path.join(config['checkpoint_pth'], f'{fo}test_{cp}_{iter}.pkl')):
+                        after = False
+                        continue
+                    checkpoint = torch.load(os.path.join(config['checkpoint_pth'], f'{fo}test_{cp}_{iter}.pkl'))
                     trans.load_state_dict(checkpoint['state_dict'])
-                    pred_lst, label_lst, belong_lst = [], [], []
-                    for input, target, attribution in val_dataloader:  # attribution
+                    val_dataloader = Dataprocess.loadFERModelIntoDataloader(fo, 'test')
+                    for input, target, attribution in tqdm.tqdm(val_dataloader):  # attribution
                         label_lst.append(target)
                         with torch.no_grad():
                             pred = trans(input, pos_encoding)
@@ -345,9 +399,10 @@ class Modeltest(object):
                         score10 += rs.view(-1).float().sum()
                         total10 += input.shape[0]
                         print('current acc', score10 / total10)
+                if after:
                     vote_acc10 += dataProcess.Utils.vote(pred_lst, belong_lst, label_lst)
-                    writer_acc_val.add_scalar('test avg acc', vote_acc10*100, cp)
-                    writer_acc_val.add_scalar('test avg acc', score10 / total10 * 100, cp)
+                    writer_acc_val.add_scalar('test avg acc', score10 / total10 * 100, iter)
+                    writer_acc_vote.add_scalar('test vote acc', vote_acc10 * 100, iter)
                     print('acc ', score10/total10, 'vote', vote_acc10)
 def deleteStaticDict(pth,epoch):
     import torch
@@ -372,4 +427,4 @@ if __name__ == '__main__':
     # folds = [i+1 for i in range(1)]
     # Modeltest.test4PickUpEpoch(fold=folds)
     # Modeltest.lstmtest([1])
-    Modeltest.testCheck([1])
+    Modeltest.testlstmAB([1])

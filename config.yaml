@@ -102,10 +102,10 @@ learning_rate: 1e-3
 epoch: 500
 fast_fold: [1,5,9]
 test_fold: 10
-checkpoint_pth: '/home/exp-10086/Project/ferdataset/ourFace/vit/'
-cuda_idx: '0'
+checkpoint_pth: '/home/exp-10086/Project/ferdataset/ourFace/lstmRgb/'
+cuda_idx: '1'
 # data Post process config
 vote: False
 # log information config
-LOG_CHECK: '!!!train: 对比41%, 10fold'
-LOG_pth: 'train.log'
+LOG_CHECK: '!!!train:OF 5 fold 对比'
+LOG_pth: 'train1.log'

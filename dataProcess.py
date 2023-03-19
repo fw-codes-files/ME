@@ -1598,15 +1598,18 @@ class Dataprocess():
         for belongto,trainl in enumerate(txt_lines):
             if trainl.__contains__('fold') or trainl.startswith('\n'):
                 continue
+            if (belongto-1) % 5 !=0:
+                continue
+            attri = belongto+(fold-1)*150
             sub_pth = trainl.split(' ')[0]
             video_label = trainl.split(' ')[1]
             one_video_pth = os.path.join(OF_video_root,sub_pth)
-            sample_numbers = len(os.listdir(one_video_pth))
-            for sn in range(1):
+            sample_numbers = len(os.listdir(one_video_pth)) # 本来有100个样本 下一行是手动定样本数量
+            for sn in range(30):
                 one_sample_pth = os.path.join(one_video_pth, sn.__str__())
-                data_lst.append((one_sample_pth,video_label,belongto))
+                data_lst.append((one_sample_pth,video_label,attri))
         datasets = OFDataSet(data_lst)
-        dataloader = torch.utils.data.DataLoader(datasets, shuffle=False, batch_size=config['batch_size'])
+        dataloader = torch.utils.data.DataLoader(datasets, shuffle=config['Shuffle'], batch_size=config['batch_size'])
         return dataloader
     @classmethod
     def saveSamplesInSSD(cls):
@@ -1723,7 +1726,15 @@ if __name__ == '__main__':
     # Dataprocess.rgbPatchFea()
     # Dataprocess.pretrainDataProcess()
     # Dataprocess.readAndLoadSingleFold(1, True)
-    dl = Dataprocess.loadFERModelIntoDataloader(1)
-    for fea,label,attribution in dl:
-        print()
+    # test voting
+    pred=torch.rand(size=(128,8)).cuda()
+    soft = torch.nn.Softmax(dim=1)
+    pred = soft(pred)
+    i_m = pred.max(dim=1)[0] > torch.tensor([0.2]*128).cuda()
+    print(pred[i_m].shape)
+    # idx_pred = torch.topk(pred, 1, dim=1)[1]
+    # belong_lst=[1]*64 + [3]*16 +[5]*32+[10]*16
+    # belong_lst=torch.tensor(belong_lst).cuda()
+    # target=torch.ones(size=(128,1),dtype=torch.long).cuda()
+    # acc = Utils.vote([pred],[belong_lst],[target])
     pass

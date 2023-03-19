@@ -230,6 +230,49 @@ class LSTM_model_traintest(object):
                                    'state_dict': lstm.state_dict()}
                     torch.save(checkpoints, f'/home/exp-10086/Project/ferdataset/ourFace/lstmRgb/{i}test_{e + 1}.pkl')
             logging.info(f'------------------------------------fold{c} ends-----------------------------------------------')
+    @classmethod
+    def lstmAB(cls):
+        from torch.utils.tensorboard import SummaryWriter
+        for i in range(3, 4):
+            f_lst = [1, 2, 3, 4, 5]
+            f_lst.remove(i)
+            lstm = FollowLSTM(inputDim=config['LSTM_input_dim'], hiddenNum=config['LSTM_hidden_dim'],
+                           outputDim=config['LSTM_output_dim'], layerNum=config['LSTM_layerNum'],
+                           cell=config['LSTM_cell'], use_cuda=config['use_cuda'])
+            lstm.cuda()
+            lstm.train()
+            optimizer = torch.optim.AdamW(lstm.parameters(), lr=float(config['learning_rate']), betas=(0.9, 0.95))
+            loss_func = torch.nn.CrossEntropyLoss()
+            writer_loss = SummaryWriter(f'./tb/loss/B16_OF_lstm/{i}/')
+            writer_acc_train = SummaryWriter(f'./tb/acc/B16_OF_lstm/{i}/')
+            train_dataloader = Dataprocess.loadFERModelIntoDataloader(i,'train')
+            for e in trange(config['epoch']):
+                score = 0
+                total = 0
+                for input, target,_ in tqdm.tqdm(train_dataloader):
+                    optimizer.zero_grad()
+                    pred = lstm(input)
+                    loss = loss_func(pred, target.long())
+                    loss.backward()
+                    optimizer.step()
+                    # eval train
+                    idx_pred = torch.topk(pred, 1, dim=1)[1]
+                    rs = idx_pred.eq(target.reshape(-1, 1))
+                    score += rs.view(-1).float().sum()
+                    total += input.shape[0]
+                    print('\r' + f'fold:{i} epoch:{e} loss:{loss} acc:{score / total * 100}% ', end='', flush=True)
+                    if math.isnan(loss):
+                        break
+                sacal_loss = loss.detach().cpu()
+                writer_loss.add_scalar(f'train loss', sacal_loss, e)
+                writer_acc_train.add_scalar('train acc', score / total * 100, e)
+                if (e + 1) % 1 == 0:
+                    checkpoints = {'model_type': 'lstm',
+                                   'epoch': e + 1,
+                                   'optim': optimizer.state_dict(),
+                                   'state_dict': lstm.state_dict()}
+                    torch.save(checkpoints, f'/home/exp-10086/Project/ferdataset/ourFace/lstmRgb/{i}test_{e + 1}.pkl')
+            logging.info(f'------------------------------------fold{i} ends-----------------------------------------------')
 class Transformer_traintest():
     def __init__(self):
         pass
@@ -1027,7 +1070,7 @@ class Two_tsm_train():
         loss_func = torch.nn.CrossEntropyLoss()
         pos_encoding = Utils.SinusoidalEncoding(50, config['T_proj_dim'])
         itt = 0
-        for i in range(1, 2): # 用几个fold进行训练
+        for i in range(1, 3): # 用几个fold进行训练
             nv = NormalB16ViT(None)
             nv.cuda()
             nv.train()
@@ -1059,13 +1102,13 @@ class Two_tsm_train():
                         checkpoints = {'model_type': 'ViT',
                                        'optim': optimizer.state_dict(),
                                        'state_dict': nv.state_dict()}
-                        torch.save(checkpoints, f'/home/exp-10086/Project/ferdataset/ourFace/vit/{i}test_{e}.pkl')
+                        torch.save(checkpoints, f'/home/exp-10086/Project/ferdataset/ourFace/vit/{i}test_{e+1}_{itt+1}.pkl')
                     itt += 1
 
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='train function choice')
-    parser.add_argument('-M', default='B16_check', type=str, metavar='N',
+    parser.add_argument('-M', default='AB', type=str, metavar='N',
                         help='s means single and m means minibatch')
     args = parser.parse_args()
     if args.M == 'single': # lstm train with bs=1
@@ -1102,5 +1145,7 @@ def main():
         Two_tsm_train.B16Vit_AE(config['epoch'])
     elif args.M == 'B16_check':
         Two_tsm_train.B16Vit_NoMidData(config['epoch'])
+    elif args.M == 'AB':
+        LSTM_model_traintest.lstmAB()
 if __name__ == '__main__':
     main()
