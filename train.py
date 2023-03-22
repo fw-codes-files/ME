@@ -1106,19 +1106,26 @@ class Two_tsm_train():
                     itt += 1
     @classmethod
     def B16_AB(cls):
-        from model import NormalB16ViT
         from torch.utils.tensorboard import SummaryWriter
         from dataProcess import Utils
         loss_func = torch.nn.CrossEntropyLoss()
         pos_encoding = Utils.SinusoidalEncoding(270, config['T_proj_dim'])
         for i in range(1, 2):
-            nv = NormalB16ViT(None)
+            nv = B16ViT_AB(None)
+            checkpoint = torch.load(os.path.join(config['checkpoint_pth'], f'{i}test_37.pkl')) # path is needed
+            B16_state = checkpoint['state_dict']
+            model_state_dict = nv.state_dict()
+            for Bk in B16_state:
+                if Bk.startswith('alpha') or Bk.startswith('beta'):
+                    continue
+                else:
+                    model_state_dict[Bk] = B16_state[Bk]
             nv.cuda()
             nv.train()
             optimizer = torch.optim.AdamW(nv.parameters(), lr=1e-3, betas=(0.9, 0.95))
             train_dataloader = Dataprocess.loadFERModelIntoDataloader(i,'train')
-            writer_loss = SummaryWriter(f'./tb/loss/B16_AB_WholeV/{i}/')
-            writer_acc_train = SummaryWriter(f'./tb/acc/B16_AB_WholeV/{i}/')
+            writer_loss = SummaryWriter(f'./tb/loss/B16_whole_AB_res18/{i}')
+            writer_acc_train = SummaryWriter(f'./tb/acc/B16_whole_AB_res18/{i}/')
             for e in range(config['epoch']):
                 score, total = 0, 0
                 for input, target in train_dataloader:

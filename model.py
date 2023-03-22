@@ -1,6 +1,8 @@
 '''
 Neural Network models, implemented by PyTorch
 '''
+import time
+
 import numpy as np
 import timm.models.vision_transformer
 import torch
@@ -118,28 +120,32 @@ class FollowLSTM(BaseModel):
 class BasicBlock(nn.Module):
     expansion = 1
 
-    def __init__(self, in_planes, planes, stride=1):
+    def __init__(self, inplanes, planes, stride=1, downsample=None):
         super(BasicBlock, self).__init__()
-        self.conv1 = nn.Conv2d(
-            in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.conv1 = conv3x3(inplanes, planes, stride)
         self.bn1 = nn.BatchNorm2d(planes)
-        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3,
-                               stride=1, padding=1, bias=False)
+        self.relu = nn.ReLU()
+        self.conv2 = conv3x3(planes, planes)
         self.bn2 = nn.BatchNorm2d(planes)
-
-        self.shortcut = nn.Sequential()
-        if stride != 1 or in_planes != self.expansion * planes:
-            self.shortcut = nn.Sequential(
-                nn.Conv2d(in_planes, self.expansion * planes,
-                          kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(self.expansion * planes)
-            )
+        self.downsample = downsample
+        self.stride = stride
 
     def forward(self, x):
-        out = F.relu(self.bn1(self.conv1(x)))
-        out = self.bn2(self.conv2(out))
-        out += self.shortcut(x)
-        out = F.relu(out)
+        residual = x
+
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+
+        out = self.conv2(out)
+        out = self.bn2(out)
+
+        if self.downsample is not None:
+            residual = self.downsample(x)
+
+        out += residual
+        out = self.relu(out)
+
         return out
 class Bottleneck(nn.Module):
     expansion = 4
@@ -171,37 +177,60 @@ class Bottleneck(nn.Module):
         out = F.relu(out)
         return out
 class ResNet(nn.Module):
-    def __init__(self, block, num_blocks, num_classes=7):
+    def __init__(self, block, layers):
+        self.inplanes = 64
         super(ResNet, self).__init__()
-        self.in_planes = 64
-
-        # self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
-        self.conv1 = nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1, bias=False)
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3,
+                               bias=False)
         self.bn1 = nn.BatchNorm2d(64)
-        self.layer1 = self._make_layer(block, 64, num_blocks[0], stride=1)
-        self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2)
-        self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
-        self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
-        self.linear = nn.Linear(512 * block.expansion, num_classes)
+        self.relu = nn.ReLU()
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.layer1 = self._make_layer(block, 64, layers[0])
+        self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
+        self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
+        self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
+        self.avgpool = nn.AdaptiveAvgPool2d(1)
+        self.num_features = 512
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+                m.weight.data.normal_(0, math.sqrt(2. / n))
+            elif isinstance(m, nn.BatchNorm2d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
 
-    def _make_layer(self, block, planes, num_blocks, stride):
-        strides = [stride] + [1] * (num_blocks - 1)
+    def _make_layer(self, block, planes, blocks, stride=1):
+        downsample = None
+        if stride != 1 or self.inplanes != planes * block.expansion:
+            downsample = nn.Sequential(
+                nn.Conv2d(self.inplanes, planes * block.expansion,
+                          kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(planes * block.expansion),
+            )
+
         layers = []
-        for stride in strides:
-            layers.append(block(self.in_planes, planes, stride))
-            self.in_planes = planes * block.expansion
+        layers.append(block(self.inplanes, planes, stride, downsample))
+        self.inplanes = planes * block.expansion
+        for i in range(1, blocks):
+            layers.append(block(self.inplanes, planes))
+
         return nn.Sequential(*layers)
 
-    def forward(self, x):
-        out = F.relu(self.bn1(self.conv1(x)))
-        out = self.layer1(out)
-        out = self.layer2(out)
-        out = self.layer3(out)
-        out = self.layer4(out)
-        out = F.avg_pool2d(out, 4)
-        out = out.view(out.size(0), -1)
-        # out = self.linear(out)
-        return out
+    def forward(self, x=''):
+        f = self.conv1(x)
+        f = self.bn1(f)
+        f = self.relu(f)
+        f = self.maxpool(f)
+
+        f = self.layer1(f)
+        f = self.layer2(f)
+        f = self.layer3(f)
+        f = self.layer4(f)
+        f = self.avgpool(f)
+
+        f = f.squeeze(3).squeeze(2)  # f[1, 512, 1, 1] ---> f[1, 512]
+
+        return f
 def ResNet18():
     return ResNet(BasicBlock, [2, 2, 2, 2])
 def conv3x3(in_planes, out_planes, stride=1):
@@ -621,7 +650,7 @@ class NormalB16ViT(timm.models.vision_transformer.VisionTransformer):
         else:
             cls_token_pe = torch.tile(self.SinusoidalEncoding(1,self.embed_dim),(x.shape[0],1)).cuda()
             position_embeddings = torch.from_numpy(position_embeddings).cuda()
-            x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1) + torch.concatenate((cls_token_pe[:, None, :], position_embeddings.expand(x.shape[0], -1, -1)),dim=1)
+            x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1) + torch.cat((cls_token_pe[:, None, :], position_embeddings.expand(x.shape[0], -1, -1)),dim=1)
         #x(b,s,d)
         x = self.norm_pre(x)
         x = self.blocks(x)
@@ -689,7 +718,7 @@ class B16ViT_AB(timm.models.vision_transformer.VisionTransformer):
         else:
             cls_token_pe = torch.tile(self.SinusoidalEncoding(1,self.embed_dim),(x0.shape[0],1)).cuda()
             position_embeddings = torch.from_numpy(position_embeddings).cuda()
-            x = torch.cat((self.cls_token.expand(x0.shape[0], -1, -1), x0), dim=1) + torch.concatenate((cls_token_pe[:, None, :], position_embeddings.expand(x0.shape[0], -1, -1)),dim=1)
+            x = torch.cat((self.cls_token.expand(x0.shape[0], -1, -1), x0), dim=1) + torch.cat((cls_token_pe[:, None, :], position_embeddings.expand(x0.shape[0], -1, -1)),dim=1)
         x = self.norm_pre(x)
         x = self.blocks(x)
         x = self.norm(x)
@@ -699,3 +728,156 @@ class B16ViT_AB(timm.models.vision_transformer.VisionTransformer):
         hx = torch.mul(sum_fea, alphas * betas).sum(1) / torch.sum(alphas * betas, dim=1)
         pred = self.pred(hx)
         return pred
+class B16ViT_AB_Res(timm.models.vision_transformer.VisionTransformer):
+    def __init__(self,block,layers):
+        ########################################resnet18 参数##########################
+        self.inplanes = 64
+        super(B16ViT_AB_Res, self).__init__()
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3,
+                               bias=False)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.relu = nn.ReLU()
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.layer1 = self._make_layer(block, 64, layers[0])
+        self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
+        self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
+        self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
+        self.avgpool = nn.AdaptiveAvgPool2d(1)
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+                m.weight.data.normal_(0, math.sqrt(2. / n))
+            elif isinstance(m, nn.BatchNorm2d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+        ########################################vit 参数###############################
+        self.emb_proj = nn.Linear(config['T_input_dim'],self.embed_dim) # 1024->768
+        self.alpha = nn.Sequential(nn.Linear(self.embed_dim,1),nn.Sigmoid())
+        self.beta = nn.Sequential(nn.Linear(config['T_proj_dim']*2,1),nn.Sigmoid())
+        self.pos_embed_my = nn.Parameter(torch.zeros(1, config['window_size']+1, self.embed_dim))
+        self.pred = nn.Linear(self.embed_dim*2,config['T_output_dim'])
+        self.blank = torch.zeros((1,512)).cuda()
+        pass
+    @torch.no_grad()
+    def load_from(self, weights):
+        def _n2p(w, t=True):
+            if w.ndim == 4 and w.shape[0] == w.shape[1] == w.shape[2] == 1:
+                w = w.flatten()
+            if t:
+                if w.ndim == 4:
+                    w = w.transpose([3, 2, 0, 1])
+                elif w.ndim == 3:
+                    w = w.transpose([2, 0, 1])
+                elif w.ndim == 2:
+                    w = w.transpose([1, 0])
+            return torch.from_numpy(w)
+        self.pos_embed.data.copy_(torch.from_numpy(weights['Transformer/posembed_input/pos_embedding']))
+        self.cls_token.data.copy_(torch.from_numpy(weights['cls']))
+        for l,b in enumerate(self.blocks):
+            ################ln weight######################
+            b.norm1.bias.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/LayerNorm_0/bias']))
+            b.norm1.weight.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/LayerNorm_0/scale']))
+            b.norm2.bias.data.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/LayerNorm_2/bias']))
+            b.norm2.weight.data.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/LayerNorm_2/scale']))
+            ###############mlp weight######################
+            b.mlp.fc1.weight.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/MlpBlock_3/Dense_0/kernel']).t())
+            b.mlp.fc1.bias.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/MlpBlock_3/Dense_0/bias']).t())
+            b.mlp.fc2.weight.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/MlpBlock_3/Dense_1/kernel']).t())
+            b.mlp.fc2.bias.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/MlpBlock_3/Dense_1/bias']).t())
+            ###############attention weight################
+            b.attn.qkv.weight.copy_(torch.cat([_n2p(weights[f'Transformer/encoderblock_{l}/MultiHeadDotProductAttention_1/{n}/kernel'], t=False).flatten(1).T for n in ('query', 'key', 'value')]))
+            b.attn.qkv.bias.copy_(torch.cat([_n2p(weights[f'Transformer/encoderblock_{l}/MultiHeadDotProductAttention_1/{n}/bias'], t=False).reshape(-1) for n in ('query', 'key', 'value')]))
+            b.attn.proj.weight.copy_(_n2p(weights[f'Transformer/encoderblock_{l}/MultiHeadDotProductAttention_1/out/kernel']).flatten(1))
+            b.attn.proj.bias.copy_(_n2p(weights[f'Transformer/encoderblock_{l}/MultiHeadDotProductAttention_1/out/bias']))
+    @torch.no_grad()
+    def SinusoidalEncoding(self, seq_len, d_model):
+        pos_table = np.array([
+            [pos / np.power(10000, 2 * i / d_model) for i in range(d_model)]
+            for pos in range(seq_len)])
+        pos_table[0, 0::2] = np.sin(pos_table[0, 0::2])
+        pos_table[0, 1::2] = np.cos(pos_table[0, 1::2])
+        return torch.FloatTensor(pos_table)
+    def _make_layer(self, block, planes, blocks, stride=1):
+        downsample = None
+        if stride != 1 or self.inplanes != planes * block.expansion:
+            downsample = nn.Sequential(
+                nn.Conv2d(self.inplanes, planes * block.expansion,
+                          kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(planes * block.expansion),
+            )
+
+        layers = []
+        layers.append(block(self.inplanes, planes, stride, downsample))
+        self.inplanes = planes * block.expansion
+        for i in range(1, blocks):
+            layers.append(block(self.inplanes, planes))
+
+        return nn.Sequential(*layers)
+    def forwardRes(self, x):
+        f = self.conv1(x)
+        f = self.bn1(f)
+        f = self.relu(f)
+        f = self.maxpool(f)
+
+        f = self.layer1(f)
+        f = self.layer2(f)
+        f = self.layer3(f)
+        f = self.layer4(f)
+        f = self.avgpool(f)
+
+        f = f.squeeze(3).squeeze(2)  # f[1, 512, 1, 1] ---> f[1, 512]
+        return f
+    def forwardVit(self, rgb, position_embeddings=None):
+        x0 = self.emb_proj(rgb)
+        alphas = self.alpha(x0)
+        with torch.no_grad():
+            if position_embeddings is None:
+                x = torch.cat((self.cls_token.expand(x0.shape[0], -1, -1), x0), dim=1) + self.pos_embed_my
+            else:
+                cls_token_pe = torch.tile(self.SinusoidalEncoding(1, self.embed_dim), (x0.shape[0], 1)).cuda()
+                position_embeddings = torch.from_numpy(position_embeddings).cuda()
+                x = torch.cat((self.cls_token.expand(x0.shape[0], -1, -1), x0), dim=1) + torch.cat(
+                    (cls_token_pe[:, None, :], position_embeddings.expand(x0.shape[0], -1, -1)), dim=1)
+            x = self.norm_pre(x)
+            x = self.blocks(x)
+            x = self.norm(x)
+            v_fea = x[:, 0, :]
+            sum_fea = torch.cat((x0, v_fea[:,None,:].repeat(1, 270, 1)), dim=2)
+        betas = self.beta(sum_fea)
+        hx = torch.mul(sum_fea, alphas * betas).sum(1) / torch.sum(alphas * betas, dim=1)
+        pred = self.pred(hx)
+        return pred
+    def forward(self,x,pe=None):
+        vit_x = torch.zeros((0,270,512)).cuda()
+        for bs_unit in range(x.shape[0]):
+            real_seq = x[bs_unit]
+            real_seq_fea = self.forwardRes(real_seq)
+            real_seq_len = real_seq_fea.shape[0]
+            EOS_num = 270-real_seq_len
+            blanks = torch.tile(self.blank,(EOS_num,1))
+            sup_seq = torch.cat((real_seq_fea, blanks),dim=0)
+            vit_x = torch.cat((vit_x, sup_seq[None,:,:]),dim=0)
+        return self.forwardVit(vit_x,position_embeddings=pe)
+if __name__ == '__main__':
+    import dataProcess
+    cnn_prh = '/home/exp-10086/Project/Emotion-FAN-master/pretrain_model/Resnet18_FER+_pytorch.pth.tar'
+    vit_pth = '/home/exp-10086/Project/ferdataset/1test_37.pkl'
+    cnn_check = torch.load(cnn_prh)['state_dict']
+    vit_check = torch.load(vit_pth)['state_dict']
+    hybrid = B16ViT_AB_Res(BasicBlock,[2,2,2,2])
+    model_state = hybrid.state_dict()
+    for key in cnn_check:
+        for key in cnn_check:
+            if ((key == 'module.fc.weight') | (key == 'module.fc.bias')):
+                continue
+            else:
+                model_state[key.replace('module.', '')] = cnn_check[key]
+    for key in vit_check:
+        model_state[key] = vit_check[key]
+    imgin = torch.randn(size=(16,50,3,224,224)).cuda()
+    hybrid.train()
+    hybrid.cuda()
+    pos_encoding = dataProcess.Utils.SinusoidalEncoding(270, config['T_proj_dim'])
+    y = hybrid(imgin,pe=pos_encoding)
+    pass

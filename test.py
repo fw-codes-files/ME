@@ -427,4 +427,4 @@ if __name__ == '__main__':
     # folds = [i+1 for i in range(1)]
     # Modeltest.test4PickUpEpoch(fold=folds)
     # Modeltest.lstmtest([1])
-    Modeltest.testlstmAB([1])
+    Modeltest.testlstmAB([1,2,3])

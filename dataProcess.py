@@ -80,6 +80,37 @@ class OFDataSet(data.Dataset):
         return one_sample_fea,label.cuda(),vi.cuda()
     def __len__(self):
         return len(self.dataset)
+class OFDataSet_img(data.Dataset):
+    def __init__(self, data_lst):  # data_lst[(data_pth,label,video_index),(),...]
+        self.dataset = data_lst
+        self.FERm = openRes()
+        self.FERm.train()
+        self.label_dic = {'Anger': 1, 'Disgust': 2, 'Fear': 3, 'Happy': 0, 'Normal': 5, 'Sad': 4, 'Surprised': 6,
+                          'Contempt': 7}
+        self.transform = transforms.Compose([transforms.Resize(224), transforms.ToTensor()])
+
+    def __getitem__(self, item):
+        data_pth = self.dataset[item][0]
+        print(data_pth)
+        frames = os.listdir(data_pth)
+        frames.sort(key=lambda x: int(x[:-4]))
+        one_sample_fea = torch.zeros((0, 512)).cuda()
+        for fr in frames:
+            img = Image.open(os.path.join(data_pth, fr)).convert('RGB')
+            img = self.transform(img)
+            frame_fea = self.FERm(img[None, :, :, :].cuda())
+            one_sample_fea = torch.cat((one_sample_fea, frame_fea), dim=0)
+        EOS_num = config['window_size'] - one_sample_fea.shape[0]
+        blanks = torch.from_numpy(np.tile(EOS, (EOS_num, 1))).cuda()
+        video = torch.cat((one_sample_fea, blanks), dim=0)
+        label = torch.tensor(
+            self.label_dic[self.dataset[item][1][:-1]] if self.dataset[item][1].__contains__('\n') else self.label_dic[
+                self.dataset[item][1]])
+        vi = torch.tensor(self.dataset[item][2])
+        return video, label.cuda(), vi.cuda()
+
+    def __len__(self):
+        return len(self.dataset)
 class Utils():
 
     def __init__(self):
