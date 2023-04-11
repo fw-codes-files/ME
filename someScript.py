@@ -4,7 +4,7 @@ import random
 import cv2
 import numpy as np
 import torch
-
+import tqdm
 
 def checkCKplusDataset():
     import os
@@ -510,10 +510,162 @@ def checkseq():
     path = '/home/exp-10086/Project/ferdataset/ourFace/seq/seq_1.txt'
     a = np.loadtxt(path)
     print(np.sum(a))
+def countAFEWseq():# 0-151
+    train_root = '/home/exp-10086/Project/Emotion-FAN-master/data/face/train_afew/'
+    emos = os.listdir(train_root)
+    seq_len = []
+    for e in emos:
+        vids = os.listdir(os.path.join(train_root, e))
+        for v in vids:
+            frames = os.listdir(os.path.join(train_root, e, v))
+            seq_len.append(len(frames))
+    print(min(seq_len),max(seq_len))
+from sklearn import svm,metrics,preprocessing
+import torchvision.transforms as transforms
+from PIL import Image
+import pickle
+INPUT_SIZE = (224, 224)
+ALL_DATA_DIR = '/home/exp-10086/Project/Emotion-FAN-master/data/video/'
+PATH='/home/exp-10086/Project/face-emotion-recognition-main/models/affectnet_emotions/enet_b0_8_best_afew.pt'
+MODEL2EMOTIW_FEATURES='./enet0_8_afew_pt_feat_emotiw.pickle'
+model = torch.load(PATH)
+feature_extractor_model = torch.load(PATH)
+feature_extractor_model.classifier=torch.nn.Identity()
+feature_extractor_model.eval()
+feature_extractor_model.cuda()
+DATA_DIR=os.path.join(ALL_DATA_DIR)
+emotion_to_index = {'Angry':0, 'Disgust':1, 'Fear':2, 'Happy':3, 'Neutral':4, 'Sad':5, 'Surprise':6}
+device = 'cuda'
+test_transforms = transforms.Compose(
+    [
+        transforms.Resize((224,224)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225])
+    ]
+)
+def get_features(data_dir):
+    filename2features = {}
+    for filename in tqdm.tqdm(os.listdir(data_dir)):
+        frames_dir = os.path.join(data_dir, filename)
+        X_global_features, X_isface = [], []
+        imgs = []
+        for img_name in os.listdir(frames_dir):
+            # img = Image.open(os.path.join(frames_dir, img_name))
+            img = Image.open('/home/exp-10086/Project/ferdataset/ourFace/vote_frame_cropped/Anger/10/1.jpg')
+            img_tensor = test_transforms(img)
+            X_isface.append('noface' not in img_name)
+            if img.size:
+                imgs.append(img_tensor)
+                if len(imgs) >= 16:
+                    scores = feature_extractor_model(torch.stack(imgs, dim=0).to(device))
+                    scores = scores.data.cpu().numpy()
+                    if len(X_global_features) == 0:
+                        X_global_features = scores
+                    else:
+                        X_global_features = np.concatenate((X_global_features, scores), axis=0)
+                    imgs = []
+        if len(imgs) > 0:
+            scores = feature_extractor_model(torch.stack(imgs, dim=0).to(device))
+            scores = scores.data.cpu().numpy()
+            if len(X_global_features) == 0:
+                X_global_features = scores
+            else:
+                X_global_features = np.concatenate((X_global_features, scores), axis=0)
+        X_isface = np.array(X_isface)
+        filename2features[filename] = (X_global_features, X_isface)
+    return filename2features
+def generateFea():
+    filename2features_val = get_features(os.path.join(DATA_DIR, 'val_afew/AlignedFaces_LBPTOP_Points/frames_mtcnn_cropped/'))
+    filename2features_train = get_features(os.path.join(DATA_DIR, 'train_afew/AlignedFaces_LBPTOP_Points/frames_mtcnn_cropped/'))  # _cropped
+
+    with open(MODEL2EMOTIW_FEATURES, 'wb') as handle:
+        pickle.dump([filename2features_train,filename2features_val], handle, protocol=pickle.HIGHEST_PROTOCOL)
+    print(MODEL2EMOTIW_FEATURES)
+###############################################################################################################################
+def create_dataset(filename2features, data_dir):
+    x = []
+    y = []
+    has_faces = []
+    for category in emotion_to_index:
+        for filename in os.listdir(os.path.join(data_dir, category)):
+            fn = os.path.splitext(filename)[0]
+            if not fn in filename2features:
+                continue
+            features = filename2features[fn]
+            total_features = None
+            if True:
+                cur_features = features[0][features[-1] == 1]
+            else:
+                cur_features = features[0]
+            if len(cur_features) == 0:
+                has_faces.append(0)
+                total_features = np.zeros_like(feature)
+            else:
+                has_faces.append(1)
+                mean_features = (np.mean(cur_features, axis=0))
+                std_features = (np.std(cur_features, axis=0))
+                max_features = (np.max(cur_features, axis=0))
+                min_features = (np.min(cur_features, axis=0))
+                feature = np.concatenate((mean_features, std_features, min_features, max_features), axis=None)
+                total_features = feature
+            if total_features is not None:
+                x.append(total_features)
+                y.append(emotion_to_index[category])
+    x = np.array(x)
+    y = np.array(y)
+    has_faces = np.array(has_faces)
+    return x, y, has_faces
+def afewTrainandTest():
+    with open(MODEL2EMOTIW_FEATURES, 'rb') as handle:
+        filename2features_train,filename2features_val=pickle.load(handle)
+    print(len(filename2features_train),len(filename2features_val))
+    x_test, y_test, has_faces_test = create_dataset(filename2features_val, os.path.join(DATA_DIR, 'val_afew'))
+    x_train, y_train, has_faces_train = create_dataset(filename2features_train, os.path.join(DATA_DIR, 'train_afew'))
+    x_train_norm=preprocessing.normalize(x_train,norm='l2')
+    x_test_norm=preprocessing.normalize(x_test,norm='l2')
+    clf = svm.LinearSVC(C=1.1)
+    clf.fit(x_train_norm[has_faces_train==1], y_train[has_faces_train==1])
+    y_pred = clf.predict(x_test_norm)
+    print("Accuracy:",metrics.accuracy_score(y_test[has_faces_test==1], y_pred[has_faces_test==1]))
+    print("Complete accuracy:",metrics.accuracy_score(y_test, y_pred))
+
+def countlmsandrgbAndfixLms():
+    rgb_ = '/home/exp-10086/Project/ferdataset/ourFace/vote_frame_cropped/'
+    lms_ = '/home/exp-10086/Project/ferdataset/ourFace/votelabel_lms/'
+    for e in os.listdir(rgb_):
+        vis = os.listdir(f'{rgb_}{e}/')
+        for v in vis:
+            frames = os.listdir(f'{rgb_}{e}/{v}')
+            for f in frames:
+                if not os.path.exists(f'{lms_}{e}/{v}/{f[:-4].replace("noface","")}.txt'):
+                    lost_lms_f = f'{lms_}{e}/{v}/{f[:-4].replace("noface","")}.txt'
+                    pre_lms,post_lms = None,None
+                    for i in range(1,271):
+                        pre_lms_f = f'{lms_}{e}/{v}/{int(f[:-4].replace("noface",""))-i}.txt'
+                        if os.path.exists(pre_lms_f):
+                            pre_lms = np.loadtxt(pre_lms_f)
+                            break
+                    for j in range(1,271):
+                        post_lms_f = f'{lms_}{e}/{v}/{int(f[:-4].replace("noface",""))+j}.txt'
+                        if os.path.exists(post_lms_f):
+                            post_lms = np.loadtxt(post_lms_f)
+                            break
+                    if pre_lms is not None and post_lms is not None:
+                        dis = j+i
+                        lost_lms = i/dis * pre_lms + j/dis * post_lms
+                    if pre_lms is None and post_lms is not None:
+                        lost_lms = post_lms
+                    if pre_lms is not None and post_lms is None:
+                        lost_lms = pre_lms
+                    if pre_lms is not None and post_lms is not None:
+                        pass
+                    # np.savetxt(lost_lms_f,lost_lms)
+                    print(pre_lms_f,lost_lms_f,post_lms_f)
 if __name__ == '__main__':
     # shapes, exps = [], []
     # for fold in range(1,11):
     #     geryparamtxt(fold)
     # print(np.std(np.array(shapes)), np.mean(np.array(shapes)), np.std(np.array(exps)), np.mean(np.array(exps)))
-    checkseq()
+    countlmsandrgbAndfixLms()
     pass

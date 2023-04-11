@@ -21,12 +21,13 @@ import torchvision.transforms as transforms
 ##################
 target = np.array([[16, 12], [31, 12]])  # eye position in 2d image, for now, fer2013 dataset which image size is 48*48
 target_fan = np.array([[75, 68], [150, 68]])  # like previous line , just image size is 224*224
-EOS = np.zeros((1, config['T_input_dim']))  # padding of origin 3d lms data sequence
+EOS = np.zeros((1, 1280))  # padding of origin 3d lms data sequence
 AE_EOS = np.zeros((1, config['AE_mid_dim']))  # padding of AE mid feature sequence
 PE_EOS = np.zeros((1, config['T_input_dim']))
+LMS_EOS =  np.zeros((1, 204))
 standardImg = cv2.imread('./img.png')  # used to through 3DDFA net, then pointcloud produced by this picture will be a standard face pose. All face pose will be aligned to this face's pointcloud pose
 softmax = torch.nn.Softmax(dim=1)
-p_m = joblib.load('/home/exp-10086/Project/ME/weights/pca.m')
+# p_m = joblib.load('/home/exp-10086/Project/ME/weights/pca.m')
 class LSTMDataSet(data.Dataset):
     '''
         this class has no problem, just convert data to dataset
@@ -53,7 +54,6 @@ class LSTMDataSet(data.Dataset):
             return self.input[idx].cuda(), self.target[idx].cuda()
     def __len__(self):
         return self.target.shape[0]
-
 class OFDataSet(data.Dataset):
     def __init__(self,data_lst): # data_lst[(data_pth,label,video_index),(),...]
         self.dataset = data_lst
@@ -63,52 +63,164 @@ class OFDataSet(data.Dataset):
     def __getitem__(self, item):
         data_pth = self.dataset[item][0]
         frames = os.listdir(data_pth)
-        frames.sort()
-        one_sample_fea = torch.zeros((0,512)).cuda()
+        frames.sort(key=lambda x:int(x[:-4]))
+        one_sample_fea = torch.zeros((0, 512)).cuda()
+        # one_video_lms = torch.zeros((0, 204)).cuda()
         for fr in frames:
-            # img = cv2.imread(os.path.join(data_pth,fr))
-            # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) # 原来就是rgb进入网络
-            # img = np.transpose(img, (2,1,0))
-            # img = img/255
             img = Image.open(os.path.join(data_pth,fr)).convert('RGB')
+            # one_lms = torch.from_numpy(np.loadtxt(os.path.join(data_pth.replace('voteLabel', 'votelabel_lms'), f'{fr.split(".")[0]}.txt'))).cuda()
+            # one_lms = (one_lms+10.5)/24.62 # (x-min)/(max-min)
             img = self.transform(img)
             with torch.no_grad():
                 frame_fea,_ = self.FERm(img[None,:,:,:].cuda(),phrase='eval')
             one_sample_fea = torch.cat((one_sample_fea, frame_fea), dim=0)
+            # one_video_lms = torch.cat((one_video_lms, one_lms.reshape(1,-1)), dim=0)
+        EOS_num = config['window_size'] - one_sample_fea.shape[0]
+        rgb_blanks = torch.from_numpy(np.tile(EOS, (EOS_num, 1))).cuda()
+        # lms_blanks = torch.from_numpy(np.tile(LMS_EOS, (EOS_num, 1))).cuda()
+        rgb_video = torch.cat((one_sample_fea, rgb_blanks), dim=0)
+        # lms_video = torch.cat((one_video_lms, lms_blanks), dim=0)
         label = torch.tensor(self.label_dic[self.dataset[item][1][:-1]] if self.dataset[item][1].__contains__('\n') else self.label_dic[self.dataset[item][1]])
         vi = torch.tensor(self.dataset[item][2])
-        return one_sample_fea,label.cuda(),vi.cuda()
+        return rgb_video,label.cuda(),vi.cuda() #,lms_video
     def __len__(self):
         return len(self.dataset)
-class OFDataSet_img(data.Dataset):
+class OFDataSet1(data.Dataset):
+    '''double mode'''
     def __init__(self, data_lst):  # data_lst[(data_pth,label,video_index),(),...]
         self.dataset = data_lst
-        self.FERm = openRes()
-        self.FERm.train()
-        self.label_dic = {'Anger': 1, 'Disgust': 2, 'Fear': 3, 'Happy': 0, 'Normal': 5, 'Sad': 4, 'Surprised': 6,
-                          'Contempt': 7}
+        self.FERm = loadM()
+        self.label_dic = {'Anger': 1, 'Disgust': 2, 'Fear': 3, 'Happy': 0, 'Normal': 5, 'Sad': 4, 'Surprised': 6,'Contempt': 7}
         self.transform = transforms.Compose([transforms.Resize(224), transforms.ToTensor()])
-
     def __getitem__(self, item):
         data_pth = self.dataset[item][0]
-        print(data_pth)
         frames = os.listdir(data_pth)
         frames.sort(key=lambda x: int(x[:-4]))
         one_sample_fea = torch.zeros((0, 512)).cuda()
+        one_video_lms = torch.zeros((0, 204)).cuda()
         for fr in frames:
             img = Image.open(os.path.join(data_pth, fr)).convert('RGB')
+            one_lms = torch.from_numpy(np.loadtxt(os.path.join(data_pth.replace('voteLabel', 'votelabel_lms'), f'{fr.split(".")[0]}.txt'))).cuda()
+            one_lms = (one_lms+10.5)/24.62 # (x-min)/(max-min)
             img = self.transform(img)
-            frame_fea = self.FERm(img[None, :, :, :].cuda())
+            with torch.no_grad():
+                frame_fea, _ = self.FERm(img[None, :, :, :].cuda(), phrase='eval')
             one_sample_fea = torch.cat((one_sample_fea, frame_fea), dim=0)
+            one_video_lms = torch.cat((one_video_lms, one_lms.reshape(1,-1)), dim=0)
         EOS_num = config['window_size'] - one_sample_fea.shape[0]
-        blanks = torch.from_numpy(np.tile(EOS, (EOS_num, 1))).cuda()
-        video = torch.cat((one_sample_fea, blanks), dim=0)
+        rgb_blanks = torch.from_numpy(np.tile(EOS, (EOS_num, 1))).cuda()
+        lms_blanks = torch.from_numpy(np.tile(LMS_EOS, (EOS_num, 1))).cuda()
+        rgb_video = torch.cat((one_sample_fea, rgb_blanks), dim=0)
+        lms_video = torch.cat((one_video_lms, lms_blanks), dim=0)
+        label = torch.tensor(self.label_dic[self.dataset[item][1][:-1]] if self.dataset[item][1].__contains__('\n') else self.label_dic[self.dataset[item][1]])
+        vi = torch.tensor(self.dataset[item][2])
+        return rgb_video, label.cuda(), vi.cuda(), lms_video
+    def __len__(self):
+        return len(self.dataset)
+class OFDataSet2(data.Dataset):
+    '''double mode'''
+    def __init__(self, data_lst):  # data_lst[(data_pth,label,video_index),(),...]
+        self.dataset = data_lst
+        self.FERm = torch.load('/home/exp-10086/Project/face-emotion-recognition-main/models/affectnet_emotions/enet_b0_8_best_afew.pt')
+        self.FERm.classifier=torch.nn.Identity()
+        self.FERm.eval()
+        self.FERm.cuda()
+        self.label_dic = {'Anger': 1, 'Disgust': 2, 'Fear': 3, 'Happy': 0, 'Normal': 5, 'Sad': 4, 'Surprised': 6,'Contempt': 7}
+        self.transform = transforms.Compose([transforms.Resize((224,224)),transforms.ToTensor(),transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225])])
+    def __getitem__(self, item):
+        data_pth = self.dataset[item][0]
+        frames = os.listdir(data_pth)
+        frames.sort(key=lambda x: int(x[:-4].replace("noface","")))
+        one_sample_fea = torch.zeros((0, 1280)).cuda()
+        one_video_lms = torch.zeros((0, 204)).cuda()
+        for fr in frames:
+            img = Image.open(os.path.join(data_pth, fr)).convert('RGB')
+            one_lms = torch.from_numpy(np.loadtxt(os.path.join(data_pth.replace('vote_frame_cropped', 'deca_lms'), f'{fr.split(".")[0].replace("noface","")}lms.txt'))).cuda()
+            # one_lms = (one_lms+10.5)/24.62 # (x-min)/(max-min)
+            one_lms = (one_lms+18.96)/41.64 # (x-min)/(max-min)
+            img = self.transform(img)
+            with torch.no_grad():
+                frame_fea = self.FERm(img[None, :, :, :].cuda())
+            one_sample_fea = torch.cat((one_sample_fea, frame_fea), dim=0)
+            one_video_lms = torch.cat((one_video_lms, one_lms.reshape(1,-1)), dim=0)
+        EOS_num = config['window_size'] - one_sample_fea.shape[0]
+        rgb_blanks = torch.from_numpy(np.tile(EOS, (EOS_num, 1))).cuda()
+        lms_blanks = torch.from_numpy(np.tile(LMS_EOS, (EOS_num, 1))).cuda()
+        rgb_video = torch.cat((one_sample_fea, rgb_blanks), dim=0)
+        lms_video = torch.cat((one_video_lms, lms_blanks), dim=0)
+        label = torch.tensor(self.label_dic[self.dataset[item][1][:-1]] if self.dataset[item][1].__contains__('\n') else self.label_dic[self.dataset[item][1]])
+        vi = torch.tensor(self.dataset[item][2])
+        return rgb_video, label.cuda(), vi.cuda(), lms_video
+    def __len__(self):
+        return len(self.dataset)
+class AFEWDataSet(data.Dataset):
+    def __init__(self,data_lst):
+        self.dataset = data_lst
+        self.label_dict = {'Angry': 1,'Disgust': 2,'Fear': 3,'Happy': 0,'Neutral': 5,'Sad': 4,'Surprise': 6}
+        self.FERm = loadM()
+        self.transf = transforms.Compose([transforms.Resize(224), transforms.ToTensor()])
+    def __getitem__(self, item):
+        data_pth = self.dataset[item][0]
+        one_video_frames = os.listdir(data_pth)
+        one_video_frames.sort()
+        one_video_fea = torch.zeros((0,512)).cuda()
+        for f in one_video_frames:
+            img = Image.open(os.path.join(data_pth, f)).convert('RGB')
+            img = self.transf(img)
+            with torch.no_grad():
+                frame_fea, _ = self.FERm(img[None, :, :, :].cuda(), phrase='eval')
+            one_video_fea = torch.cat((one_video_fea, frame_fea), dim=0)
+        EOS_num = config['window_size'] - one_video_fea.shape[0]
+        one_video_fea = torch.cat((one_video_fea, torch.tile(torch.from_numpy(EOS).cuda(), (EOS_num,1))), dim=0)
         label = torch.tensor(
-            self.label_dic[self.dataset[item][1][:-1]] if self.dataset[item][1].__contains__('\n') else self.label_dic[
+            self.label_dict[self.dataset[item][1][:-1]] if self.dataset[item][1].__contains__('\n') else
+            self.label_dict[self.dataset[item][1]])
+        return one_video_fea.cuda(), label.cuda()
+    def __len__(self):
+        return len(self.dataset)
+class AFEWDataSet_lms(data.Dataset):
+    def __init__(self,data_lst):
+        self.dataset = data_lst
+        self.label_dict = {'Angry': 1,'Disgust': 2,'Fear': 3,'Happy': 0,'Neutral': 5,'Sad': 4,'Surprise': 6}
+    def __getitem__(self, item):
+        data_pth = self.dataset[item][0]
+        mode = data_pth.split('/')[-3].split('_')[0]
+        video_id = data_pth.split('/')[-2] +'/'+ data_pth.split('/')[-1]
+        data_pth = f'/home/exp-10086/Project/Data/afew_478lms_{mode}/{video_id}'
+        one_video_frames = os.listdir(data_pth)
+        one_video_frames.sort()
+        one_video_fea = torch.zeros((0,1434)).cuda()
+        for f in one_video_frames:
+            frame_lms = np.loadtxt(os.path.join(data_pth, f))
+            one_video_fea = torch.cat((one_video_fea, torch.from_numpy(frame_lms.reshape((1, -1))).cuda()), dim=0)
+        EOS_num = config['window_size'] - one_video_fea.shape[0]
+        one_video_fea = torch.cat((one_video_fea, torch.tile(torch.from_numpy(LMS_EOS).cuda(), (EOS_num,1))), dim=0)
+        label = torch.tensor(
+            self.label_dict[self.dataset[item][1][:-1]] if self.dataset[item][1].__contains__('\n') else
+            self.label_dict[self.dataset[item][1]])
+        return one_video_fea.cuda(), label.cuda()
+    def __len__(self):
+        return len(self.dataset)
+class CKDataSet_lms(data.Dataset):
+    def __init__(self,data_lst):
+        self.dataset = data_lst
+        self.label_dict = {'Angry': 1,'Disgust': 2,'Fear': 3,'Happy': 0,'Contempt': 5,'Sad': 4,'Surprise': 6}
+    def __getitem__(self, item):
+        data_pth = self.dataset[item][0]
+        frames = os.listdir(data_pth)
+        frames.sort()
+        one_video_lms = torch.zeros((0, 1434)).cuda()
+        for fr in frames:
+            one_lms = torch.from_numpy(np.loadtxt(os.path.join(data_pth.replace('Emotion-FAN-master/data/face/ck_face/', 'Data/ck_lms/'), f'{fr.split(".")[0]}.txt'))).cuda()
+            one_video_lms = torch.cat((one_video_lms, one_lms.reshape(1, -1)), dim=0)
+        EOS_num = 71 - one_video_lms.shape[0]
+        lms_blanks = torch.from_numpy(np.tile(LMS_EOS, (EOS_num, 1))).cuda()
+        lms_video = torch.cat((one_video_lms, lms_blanks), dim=0)
+        label = torch.tensor(
+            self.label_dict[self.dataset[item][1][:-1]] if self.dataset[item][1].__contains__('\n') else self.label_dict[
                 self.dataset[item][1]])
         vi = torch.tensor(self.dataset[item][2])
-        return video, label.cuda(), vi.cuda()
-
+        return lms_video, label.cuda(), vi.cuda()
     def __len__(self):
         return len(self.dataset)
 class Utils():
@@ -1162,7 +1274,6 @@ class Dataprocess():
         test = np.loadtxt(f'./dataset/ft_feature{fold}.txt')
         _, test_feature = Utils.inserCompeletely(split_test.astype(np.int_), test.astype(np.float32))
         return test_l, test_3d_code, np.array(pos_embed_lst, dtype=object), test_feature
-
     @classmethod
     def loadSingleFoldOF(cls, fold, half = False):
         lms3d_test = np.loadtxt(f'/home/exp-10086/Project/ferdataset/ourFace/lms3d/lms_{fold}.txt')
@@ -1378,7 +1489,6 @@ class Dataprocess():
                                       torch.from_numpy(np.array(data, dtype=np.float32)).cuda())
         dataloader = torch.utils.data.DataLoader(dataset, shuffle=config['Shuffle'], batch_size=config['batch_size'])
         return dataloader
-
     @classmethod
     def ConvertVideo2SamplesIterVotes(cls, ws, feature, lms3d, label, vote: bool = True, pos_embed=None):
         '''
@@ -1614,7 +1724,7 @@ class Dataprocess():
         '''
         txt_root = '/home/exp-10086/Project/Emotion-FAN-master/data/txt/OF_5-fold_sample_IDascendorder_step5.txt'
         txt_lines = open(txt_root).readlines()
-        OF_video_root = '/home/exp-10086/Project/ferdataset/ourFace/samples_len50'
+        OF_video_root = '/home/exp-10086/Project/ferdataset/ourFace/vote_frame_cropped/'
         data_lst = []
         # 删了被测试的fold
         for tlidx, tl in enumerate(txt_lines):
@@ -1629,18 +1739,68 @@ class Dataprocess():
         for belongto,trainl in enumerate(txt_lines):
             if trainl.__contains__('fold') or trainl.startswith('\n'):
                 continue
-            if mode != 'train':
-                if (belongto-1) % 5 !=0:
-                    continue
+            # if mode != 'train':
+            #     if (belongto-1) % 5 !=0:
+            #         continue
             attri = belongto+(fold-1)*150
             sub_pth = trainl.split(' ')[0]
             video_label = trainl.split(' ')[1]
             one_video_pth = os.path.join(OF_video_root,sub_pth)
-            sample_numbers = len(os.listdir(one_video_pth)) # 本来有100个样本 下一行是手动定样本数量
-            for sn in range(30):
-                one_sample_pth = os.path.join(one_video_pth, sn.__str__())
-                data_lst.append((one_sample_pth,video_label,attri))
-        datasets = OFDataSet(data_lst)
+            data_lst.append((one_video_pth,video_label,attri))
+        datasets = OFDataSet2(data_lst) # different data mode has diferent DataSet class !!!!!!!!!!!!!!!!!!!!!
+        dataloader = torch.utils.data.DataLoader(datasets, shuffle=config['Shuffle'], batch_size=config['batch_size'])
+        return dataloader
+    @classmethod
+    def loadAFEWDataset(cls,mode):
+        txt_root = f'/home/exp-10086/Project/Emotion-FAN-master/data/txt/afew_{mode}.txt'
+        txt_lines = open(txt_root).readlines()
+        afew_video_root = f'/home/exp-10086/Project/Emotion-FAN-master/data/face/{mode}_afew/'
+        data_lst = []
+        for belongto,trainl in enumerate(txt_lines):
+            if trainl.__contains__('fold') or trainl.startswith('\n'):
+                continue
+            if mode != 'train':
+                if (belongto-1) % 5 !=0:
+                    continue
+            attri = belongto
+            sub_pth = trainl.split(' ')[0]
+            video_label = trainl.split(' ')[1]
+            one_video_pth = os.path.join(afew_video_root,sub_pth)
+            if len(os.listdir(one_video_pth)) == 0:
+                continue
+            data_lst.append((one_video_pth,video_label,attri))
+        # afewset = AFEWDataSet(data_lst)
+        afewset = AFEWDataSet_lms(data_lst)
+        dataloader = torch.utils.data.DataLoader(afewset,batch_size=config['batch_size'],shuffle=True)
+        return dataloader
+    @classmethod
+    def loadACKDataset(cls, fold, mode):
+        txt_root = f'/home/exp-10086/Project/Emotion-FAN-master/data/txt/CK+_10-fold_sample_IDascendorder_step10.txt'
+        txt_lines = open(txt_root).readlines()
+        ck_video_root = f'/home/exp-10086/Project/Emotion-FAN-master/data/face/ck_face/'
+        data_lst = []
+        # 删了被测试的fold
+        for tlidx, tl in enumerate(txt_lines):
+            if tl.startswith(f'{fold}-fold'):
+                fold_number = tl.split(' ')[1]
+                # 如果是10fold测试 del的index还需要改一下
+                if mode == 'train':
+                    del txt_lines[tlidx:tlidx + int(fold_number) + 1]
+                else:
+                    txt_lines = txt_lines[tlidx:tlidx + int(fold_number) + 1]
+                break
+        for belongto, trainl in enumerate(txt_lines):
+            if trainl.__contains__('fold') or trainl.startswith('\n'):
+                continue
+            if mode != 'train':
+                if (belongto - 1) % 5 != 0:
+                    continue
+            attri = belongto + (fold - 1) * 150
+            sub_pth = trainl.split(' ')[0]
+            video_label = trainl.split(' ')[1]
+            one_video_pth = os.path.join(ck_video_root, sub_pth)
+            data_lst.append((one_video_pth, video_label, attri))
+        datasets = CKDataSet_lms(data_lst)  # different data mode has diferent DataSet class !!!!!!!!!!!!!!!!!!!!!
         dataloader = torch.utils.data.DataLoader(datasets, shuffle=config['Shuffle'], batch_size=config['batch_size'])
         return dataloader
     @classmethod
@@ -1708,8 +1868,6 @@ class Dataprocess():
                     if not os.path.exists(os.path.join(samples_root,sub_pth,si.__str__())):
                         os.makedirs(os.path.join(samples_root,sub_pth,si.__str__()))
                     shutil.copy(src_pth, save_pth)
-
-
 if __name__ == '__main__':
     # 删除所有.DS_Store文件
     # Dataprocess.deleleDS_Store()
@@ -1759,14 +1917,16 @@ if __name__ == '__main__':
     # Dataprocess.pretrainDataProcess()
     # Dataprocess.readAndLoadSingleFold(1, True)
     # test voting
-    pred=torch.rand(size=(128,8)).cuda()
-    soft = torch.nn.Softmax(dim=1)
-    pred = soft(pred)
-    i_m = pred.max(dim=1)[0] > torch.tensor([0.2]*128).cuda()
-    print(pred[i_m].shape)
     # idx_pred = torch.topk(pred, 1, dim=1)[1]
     # belong_lst=[1]*64 + [3]*16 +[5]*32+[10]*16
     # belong_lst=torch.tensor(belong_lst).cuda()
     # target=torch.ones(size=(128,1),dtype=torch.long).cuda()
     # acc = Utils.vote([pred],[belong_lst],[target])
+    # afewset = Dataprocess.loadAFEWDataset('train')
+    # afewloader = torch.utils.data.DataLoader(afewset,batch_size=8,shuffle=True)
+    # for fea,tar in afewloader:
+    #     print(fea.shape,tar)
+    train_dataloader = Dataprocess.loadFERModelIntoDataloader(4, 'train')
+    for a,s,d,f in train_dataloader:
+        print(1)
     pass

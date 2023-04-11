@@ -1063,29 +1063,31 @@ class Two_tsm_train():
             logging.info(f'------------------------------------train ends, train folds:{f_lst}-----------------------------------------------')
     @classmethod
     def B16Vit_NoMidData(cls, epoch):
-        from model import NormalB16ViT
+        from model import B16ViT_AB
         from torch.utils.tensorboard import SummaryWriter
         from dataProcess import Utils
 
         loss_func = torch.nn.CrossEntropyLoss()
-        pos_encoding = Utils.SinusoidalEncoding(50, config['T_proj_dim'])
-        itt = 0
-        for i in range(1, 3): # 用几个fold进行训练
-            nv = NormalB16ViT(None)
+        pos_encoding = Utils.SinusoidalEncoding(config['window_size'], config['T_proj_dim'])
+        for i in range(3, 6): # 用几个fold进行训练
+            nv = B16ViT_AB(None)
             nv.cuda()
             nv.train()
+            # ckpt = torch.load(os.path.join(config['checkpoint_pth'],f'{i}test_100.pkl'))
+            # nv.load_state_dict(ckpt['state_dict'])
             optimizer = torch.optim.AdamW(nv.parameters(), lr=1e-3, betas=(0.9, 0.95))
+            # optimizer.load_state_dict(ckpt['optim'])
             # 开始准备数据
             train_dataloader = Dataprocess.loadFERModelIntoDataloader(i,'train')
             # 开始记录指标
-            writer_loss = SummaryWriter(f'./tb/loss/B16_OF/{i}/')
-            writer_acc_train = SummaryWriter(f'./tb/acc/B16_OF/{i}/')
+            writer_loss = SummaryWriter(f'./tb/loss/vit_rgb_lms_whole/{i}/')
+            writer_acc_train = SummaryWriter(f'./tb/acc/vit_rgb_lms_whole/{i}/')
             # 开始训练
-            for e in range(epoch):
+            for e in range(1,101):
                 score, total = 0, 0
-                for input, target,_ in tqdm.tqdm(train_dataloader):
+                for input, target,_, lms in tqdm.tqdm(train_dataloader):
                     optimizer.zero_grad()
-                    pred = nv(input, pos_encoding)
+                    pred = nv(lms.float(), input.float(), pos_encoding)
                     loss = loss_func(pred, target.long())
                     loss.backward()
                     optimizer.step()
@@ -1095,42 +1097,40 @@ class Two_tsm_train():
                     score += rs.view(-1).float().sum()
                     total += input.shape[0]
                     #
-                    if (itt+1) % 10 ==0:
-                        writer_loss.add_scalar(f'train loss', loss.detach().cpu(), itt)
-                        writer_acc_train.add_scalar('train acc', score / total * 100, itt)
-                        print('train acc:',score / total * 100, 'epoch', e, f'[{itt+1}/{len(train_dataloader)}]')
-                        checkpoints = {'model_type': 'ViT',
-                                       'optim': optimizer.state_dict(),
-                                       'state_dict': nv.state_dict()}
-                        torch.save(checkpoints, f'/home/exp-10086/Project/ferdataset/ourFace/vit/{i}test_{e+1}_{itt+1}.pkl')
-                    itt += 1
+                writer_loss.add_scalar(f'train loss', loss.detach().cpu(), e)
+                writer_acc_train.add_scalar('train acc', score / total * 100, e)
+                print('train acc:',score / total * 100, 'epoch', e, f'[{e}/{len(train_dataloader)}]')
+                checkpoints = {'model_type': 'ViT',
+                               'optim': optimizer.state_dict(),
+                               'state_dict': nv.state_dict()}
+                torch.save(checkpoints, f'/home/exp-10086/Project/ferdataset/ourFace/vit_rgb_lms_whole/{i}test_{e}.pkl')
     @classmethod
     def B16_AB(cls):
         from torch.utils.tensorboard import SummaryWriter
         from dataProcess import Utils
         loss_func = torch.nn.CrossEntropyLoss()
-        pos_encoding = Utils.SinusoidalEncoding(270, config['T_proj_dim'])
-        for i in range(1, 2):
+        pos_encoding = Utils.SinusoidalEncoding(270, config['T_input_dim'])
+        for i in range(5, 6):
             nv = B16ViT_AB(None)
-            checkpoint = torch.load(os.path.join(config['checkpoint_pth'], f'{i}test_37.pkl')) # path is needed
-            B16_state = checkpoint['state_dict']
-            model_state_dict = nv.state_dict()
-            for Bk in B16_state:
-                if Bk.startswith('alpha') or Bk.startswith('beta'):
-                    continue
-                else:
-                    model_state_dict[Bk] = B16_state[Bk]
+            # checkpoint = torch.load(os.path.join(config['checkpoint_pth'], f'{i}test_37.pkl')) # path is needed
+            # B16_state = checkpoint['state_dict']
+            # model_state_dict = nv.state_dict()
+            # for Bk in B16_state:
+            #     if Bk.startswith('alpha') or Bk.startswith('beta'):
+            #         continue
+            #     else:
+            #         model_state_dict[Bk] = B16_state[Bk]
             nv.cuda()
             nv.train()
             optimizer = torch.optim.AdamW(nv.parameters(), lr=1e-3, betas=(0.9, 0.95))
-            train_dataloader = Dataprocess.loadFERModelIntoDataloader(i,'train')
-            writer_loss = SummaryWriter(f'./tb/loss/B16_whole_AB_res18/{i}')
-            writer_acc_train = SummaryWriter(f'./tb/acc/B16_whole_AB_res18/{i}/')
+            train_dataloader = Dataprocess.loadFERModelIntoDataloader(i, 'train')
+            writer_loss = SummaryWriter(f'./tb/loss/B16_rgb_lms_whole_AB_HSE/{i}')
+            writer_acc_train = SummaryWriter(f'./tb/acc/B16_rgb_lms_whole_AB_HSE/{i}/')
             for e in range(config['epoch']):
                 score, total = 0, 0
-                for input, target in train_dataloader:
+                for input, target,_,lms in tqdm.tqdm(train_dataloader, desc=f'{e}'):
                     optimizer.zero_grad()
-                    pred = nv(input, pos_encoding)
+                    pred = nv(lms.float(),input.float(), pos_encoding)
                     loss = loss_func(pred, target.long())
                     loss.backward()
                     optimizer.step()
@@ -1147,51 +1147,143 @@ class Two_tsm_train():
                                    'epoch': e + 1,
                                    'optim': optimizer.state_dict(),
                                    'state_dict': nv.state_dict()}
-                    torch.save(checkpoints, f'/home/exp-10086/Project/ferdataset/ourFace/vit/{i}test_{e + 1}.pkl')
+                    torch.save(checkpoints, f'/home/exp-10086/Project/ferdataset/ourFace/B16_rgb_lms_whole_AB_HSE/{i}test_{e + 1}.pkl')
             logging.info(f'------------------------------------train ends, train folds:{i}-----------------------------------------------')
+    @classmethod
+    def B16_AFEW(cls):
+        from model import NormalB16ViT
+        from torch.utils.tensorboard import SummaryWriter
+        from dataProcess import Utils
+
+        loss_func = torch.nn.CrossEntropyLoss()
+        pos_encoding = Utils.SinusoidalEncoding(151, config['T_proj_dim'])
+        nv = NormalB16ViT(None)
+        # b16_state = torch.load('/home/exp-10086/Project/Data/afew_whole_lms/051.pkl')
+        # nv.load_state_dict(b16_state['state_dict'])
+        nv.cuda()
+        nv.train()
+        optimizer = torch.optim.AdamW(nv.parameters(), lr=3e-6, betas=(0.9, 0.95))
+        # optimizer.load_state_dict(b16_state['optim'])
+        # 开始准备数据
+        train_dataloader = Dataprocess.loadAFEWDataset('train')
+        # 开始记录指标
+        writer_loss = SummaryWriter(f'./tb/loss/B16_AFEW_lms/train/')
+        writer_acc_train = SummaryWriter(f'./tb/acc/B16_AFEW_lms/train/')
+        # 开始训练
+        for e in range(1, 201):
+            score, total = 0, 0
+            for input, target in tqdm.tqdm(train_dataloader):
+                optimizer.zero_grad()
+                pred = nv(input.float(), pos_encoding)
+                loss = loss_func(pred, target.long())
+                loss.backward()
+                optimizer.step()
+                #
+                idx_pred = torch.topk(pred, 1, dim=1)[1]
+                rs = idx_pred.eq(target.reshape(-1, 1))
+                score += rs.view(-1).float().sum()
+                total += input.shape[0]
+                #
+            if (e + 1) % 1 == 0:
+                writer_loss.add_scalar(f'train loss', loss.detach().cpu(), e)
+                writer_acc_train.add_scalar('train acc', score / total * 100, e)
+                print('train acc:', score / total * 100, 'epoch', e, f'[{e + 1}/{len(train_dataloader)}]')
+                checkpoints = {'model_type': 'ViT',
+                               'optim': optimizer.state_dict(),
+                               'state_dict': nv.state_dict()}
+                torch.save(checkpoints, f'/home/exp-10086/Project/Data/afew_whole_lms/0{e}.pkl')
+    @classmethod
+    def B16_CK(cls):
+        from model import NormalB16ViT
+        from torch.utils.tensorboard import SummaryWriter
+        from dataProcess import Utils
+
+        loss_func = torch.nn.CrossEntropyLoss()
+        pos_encoding = Utils.SinusoidalEncoding(71, config['T_proj_dim'])
+        nv = NormalB16ViT(None)
+        # b16_state = torch.load('/home/exp-10086/Project/Data/afew_whole_lms/051.pkl')
+        # nv.load_state_dict(b16_state['state_dict'])
+        nv.cuda()
+        nv.train()
+        optimizer = torch.optim.AdamW(nv.parameters(), lr=3e-6, betas=(0.9, 0.95))
+        # optimizer.load_state_dict(b16_state['optim'])
+        for fold in range(1,2):
+            # 开始准备数据
+            train_dataloader = Dataprocess.loadACKDataset(fold,'train')
+            # 开始记录指标
+            writer_loss = SummaryWriter(f'./tb/loss/B16_CK_lms/train/{fold}')
+            writer_acc_train = SummaryWriter(f'./tb/acc/B16_CK_lms/train/{fold}')
+            # 开始训练
+            for e in range(1, 301):
+                score, total = 0, 0
+                for input, target, _ in tqdm.tqdm(train_dataloader):
+                    optimizer.zero_grad()
+                    pred = nv(input.float(), pos_encoding)
+                    loss = loss_func(pred, target.long())
+                    loss.backward()
+                    optimizer.step()
+                    #
+                    idx_pred = torch.topk(pred, 1, dim=1)[1]
+                    rs = idx_pred.eq(target.reshape(-1, 1))
+                    score += rs.view(-1).float().sum()
+                    total += input.shape[0]
+                    #
+                if (e + 1) % 1 == 0:
+                    writer_loss.add_scalar(f'train loss', loss.detach().cpu(), e)
+                    writer_acc_train.add_scalar('train acc', score / total * 100, e)
+                    print('train acc:', score / total * 100, 'epoch', e, f'[{e + 1}/{len(train_dataloader)}]')
+                    checkpoints = {'model_type': 'ViT',
+                                   'optim': optimizer.state_dict(),
+                                   'state_dict': nv.state_dict()}
+                    torch.save(checkpoints, f'/home/exp-10086/Project/Data/ck_whole_lms/{fold}_0{e}.pkl')
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='train function choice')
     parser.add_argument('-M', default='B16_AB', type=str, metavar='N',
                         help='s means single and m means minibatch')
     args = parser.parse_args()
-    if args.M == 'single': # lstm train with bs=1
-        LSTM_model_traintest.train_single_vedio()
-    elif args.M == 'mini': # lstm train with mini bs
-        LSTM_model_traintest.train_mini_batch()
-    elif args.M == 'attention': # lstm with attention
-        LSTM_model_traintest.train_justNfolds(cut=False, epoch=config['epoch'], fast=False)
-    elif args.M == 'transformer': # origin vit
-        Transformer_traintest.train(True, config['epoch'])
-    elif args.M == 'p_transformer': # packaged vit
-        Transformer_traintest.trainBypackage(True,config['epoch'])
-    elif args.M == 'ae':
-        AutoEncoder.train()
-    elif args.M == 'aevit':
-        Transformer_traintest.AEandViT(True, config['epoch']) # ae dim is related to tsm forward dim
-    elif args.M == 'vilt':
-        Transformer_traintest.ViLT(True, config['epoch'])
-    elif args.M == 'voteVit': # train and test in one epoch and vote
-        Transformer_traintest.voteVit(True, config['epoch'])
-    elif args.M == '84': # set val dateset and test data set
-        Transformer_traintest.train8Folds4ValAndTest(config['epoch'])
-    elif args.M == 'linearVote': # model changed vote into linear
-        Transformer_traintest.linearVote(config['epoch'])
-    elif args.M == 'baseline84': # baseline
-        Transformer_traintest.baseline84((config['epoch']))
-    elif args.M == '2m84':
-        Two_tsm_train.train(config['epoch'])
-    elif args.M == 'pretrain':
-        Two_tsm_train.pre2train(config['epoch'])
-    elif args.M == 'B16':
-        Two_tsm_train.B16Vit(config['epoch'])
-    elif args.M == 'B16_AE':
-        Two_tsm_train.B16Vit_AE(config['epoch'])
-    elif args.M == 'B16_check':
-        Two_tsm_train.B16Vit_NoMidData(config['epoch'])
-    elif args.M == 'AB':
-        LSTM_model_traintest.lstmAB()
-    elif args.M == 'B16_AB':
-        Two_tsm_train.B16_AB()
+    if __name__ == '__main__':
+        if args.M == 'single': # lstm train with bs=1
+            LSTM_model_traintest.train_single_vedio()
+        elif args.M == 'mini': # lstm train with mini bs
+            LSTM_model_traintest.train_mini_batch()
+        elif args.M == 'attention': # lstm with attention
+            LSTM_model_traintest.train_justNfolds(cut=False, epoch=config['epoch'], fast=False)
+        elif args.M == 'transformer': # origin vit
+            Transformer_traintest.train(True, config['epoch'])
+        elif args.M == 'p_transformer': # packaged vit
+            Transformer_traintest.trainBypackage(True,config['epoch'])
+        elif args.M == 'ae':
+            AutoEncoder.train()
+        elif args.M == 'aevit':
+            Transformer_traintest.AEandViT(True, config['epoch']) # ae dim is related to tsm forward dim
+        elif args.M == 'vilt':
+            Transformer_traintest.ViLT(True, config['epoch'])
+        elif args.M == 'voteVit': # train and test in one epoch and vote
+            Transformer_traintest.voteVit(True, config['epoch'])
+        elif args.M == '84': # set val dateset and test data set
+            Transformer_traintest.train8Folds4ValAndTest(config['epoch'])
+        elif args.M == 'linearVote': # model changed vote into linear
+            Transformer_traintest.linearVote(config['epoch'])
+        elif args.M == 'baseline84': # baseline
+            Transformer_traintest.baseline84((config['epoch']))
+        elif args.M == '2m84':
+            Two_tsm_train.train(config['epoch'])
+        elif args.M == 'pretrain':
+            Two_tsm_train.pre2train(config['epoch'])
+        elif args.M == 'B16':
+            Two_tsm_train.B16Vit(config['epoch'])
+        elif args.M == 'B16_AE':
+            Two_tsm_train.B16Vit_AE(config['epoch'])
+        elif args.M == 'B16_check':
+            Two_tsm_train.B16Vit_NoMidData(config['epoch'])
+        elif args.M == 'AB':
+            LSTM_model_traintest.lstmAB()
+        elif args.M == 'B16_AB':
+            Two_tsm_train.B16_AB()
+        elif args.M == 'B16_AFEW':
+            Two_tsm_train.B16_AFEW()
+        elif args.M == 'B16_CK':
+            Two_tsm_train.B16_CK()
 if __name__ == '__main__':
     main()

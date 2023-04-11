@@ -595,7 +595,7 @@ class NormalB16ViT(timm.models.vision_transformer.VisionTransformer):
         # self.lms_porj = nn.Linear(204, 256)
         self.emb_proj = nn.Linear(config['T_input_dim'],self.embed_dim) # 1024->768
         self.pos_embed_my = nn.Parameter(torch.zeros(1, config['window_size']+1, self.embed_dim))
-        # self.pos_embed_my.data.copy_(self.pos_embed[:,:config['window_size']+1,:]) # cut position embedding
+        self.pos_embed_my.data.copy_(self.pos_embed[:,:config['window_size']+1,:]) # cut position embedding
         self.pred = nn.Linear(self.embed_dim,config['T_output_dim'])
         pass
 
@@ -665,11 +665,14 @@ class B16ViT_AB(timm.models.vision_transformer.VisionTransformer):
             self.load_from(weights)
         else:
             pass
-        self.sig = nn.Sigmoid()
-        self.beta = nn.Sequential(nn.Linear(config['T_input_dim']*2,1),nn.Sigmoid())
-        self.emb_proj = nn.Linear(config['T_input_dim'],self.embed_dim) # 1024->768
+        self.lms_proj = nn.Linear(204,config['T_lms3d_dim'],bias=False)
+        self.emb_proj = nn.Linear(config['T_proj_dim'],self.embed_dim) # 1024->768
+        self.alpha = nn.Sequential(nn.Linear(self.embed_dim,1),nn.Sigmoid())
+        self.beta = nn.Sequential(nn.Linear(self.embed_dim*2,1),nn.Sigmoid())
         self.pos_embed_my = nn.Parameter(torch.zeros(1, config['window_size']+1, self.embed_dim))
-        self.pred = nn.Linear(self.embed_dim,config['T_output_dim'])
+        self.pred = nn.Linear(self.embed_dim*2,config['T_output_dim'])
+        self.dropout = nn.Dropout(0.5)
+        self.dropout2 = nn.Dropout(0.6)
         pass
     @torch.no_grad()
     def load_from(self, weights):
@@ -710,23 +713,28 @@ class B16ViT_AB(timm.models.vision_transformer.VisionTransformer):
         pos_table[0, 0::2] = np.sin(pos_table[0, 0::2])
         pos_table[0, 1::2] = np.cos(pos_table[0, 1::2])
         return torch.FloatTensor(pos_table)
-    def forward(self, rgb_fea, position_embeddings=None):
-        x0 = self.emb_proj(rgb_fea)
-        alphas = self.sig(x0)
+    def forward(self,lms, rgb_fea, position_embeddings=None):
+    # def forward(self,rgb_fea, position_embeddings=None):
+        lms_emb = self.lms_proj(lms)
+        cat_fea = torch.cat((lms_emb, rgb_fea),dim=2)
+        x0 = self.emb_proj(cat_fea)
         if position_embeddings is None:
             x = torch.cat((self.cls_token.expand(x0.shape[0], -1, -1), x0),dim=1) + self.pos_embed_my
         else:
-            cls_token_pe = torch.tile(self.SinusoidalEncoding(1,self.embed_dim),(x0.shape[0],1)).cuda()
+            cls_token_pe = torch.tile(self.SinusoidalEncoding(1,self.embed_dim), (x0.shape[0],1)).cuda()
             position_embeddings = torch.from_numpy(position_embeddings).cuda()
             x = torch.cat((self.cls_token.expand(x0.shape[0], -1, -1), x0), dim=1) + torch.cat((cls_token_pe[:, None, :], position_embeddings.expand(x0.shape[0], -1, -1)),dim=1)
         x = self.norm_pre(x)
         x = self.blocks(x)
         x = self.norm(x)
-        v_fea = x[:,0,:]
-        sum_fea = torch.cat((x0, v_fea.repeat(1, 50, 1)), dim=2)
-        betas = self.beta(sum_fea)
-        hx = torch.mul(sum_fea, alphas * betas).sum(1) / torch.sum(alphas * betas, dim=1)
-        pred = self.pred(hx)
+        v_fea = x[:, 0, :]
+        alphas = self.alpha(self.dropout(x0))
+        sum_fea = torch.cat((x0, v_fea[:,None,:].repeat(1, config['window_size'], 1)), dim=2)
+        betas = self.beta(self.dropout(sum_fea))
+        denomiter = torch.sum(alphas * betas, dim=1)
+        hx = torch.mul(sum_fea, alphas * betas).sum(1) / (denomiter+1e-8)
+        pred = self.pred(self.dropout2(hx))
+        # pred = self.pred(v_fea)
         return pred
 class B16ViT_AB_Res(timm.models.vision_transformer.VisionTransformer):
     def __init__(self,block,layers):
@@ -859,6 +867,86 @@ class B16ViT_AB_Res(timm.models.vision_transformer.VisionTransformer):
             sup_seq = torch.cat((real_seq_fea, blanks),dim=0)
             vit_x = torch.cat((vit_x, sup_seq[None,:,:]),dim=0)
         return self.forwardVit(vit_x,position_embeddings=pe)
+
+class MLP_B16ViT_AB(timm.models.vision_transformer.VisionTransformer):
+    def __init__(self,weights):
+        # super().__init__(embed_dim=1280,num_heads=16,patch_size=14) # h-14的设置
+        super().__init__()
+        if weights is not None:
+            self.load_from(weights)
+        else:
+            pass
+        self.lms_proj = nn.Linear(204,config['T_lms3d_dim'],bias=False)
+        self.emb_proj = nn.Sequential(nn.Linear(config['T_proj_dim'],self.embed_dim),nn.GELU(),nn.Linear(self.emb_proj,self.emb_proj)) # 1024->768
+        self.alpha = nn.Sequential(nn.Linear(self.embed_dim,1),nn.Sigmoid())
+        self.beta = nn.Sequential(nn.Linear(self.embed_dim*2,1),nn.Sigmoid())
+        self.pos_embed_my = nn.Parameter(torch.zeros(1, config['window_size']+1, self.embed_dim))
+        self.pred = nn.Linear(self.embed_dim*2,config['T_output_dim'])
+        self.dropout = nn.Dropout(0.5)
+        self.dropout2 = nn.Dropout(0.6)
+        pass
+    @torch.no_grad()
+    def load_from(self, weights):
+        def _n2p(w, t=True):
+            if w.ndim == 4 and w.shape[0] == w.shape[1] == w.shape[2] == 1:
+                w = w.flatten()
+            if t:
+                if w.ndim == 4:
+                    w = w.transpose([3, 2, 0, 1])
+                elif w.ndim == 3:
+                    w = w.transpose([2, 0, 1])
+                elif w.ndim == 2:
+                    w = w.transpose([1, 0])
+            return torch.from_numpy(w)
+        self.pos_embed.data.copy_(torch.from_numpy(weights['Transformer/posembed_input/pos_embedding']))
+        self.cls_token.data.copy_(torch.from_numpy(weights['cls']))
+        for l,b in enumerate(self.blocks):
+            ################ln weight######################
+            b.norm1.bias.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/LayerNorm_0/bias']))
+            b.norm1.weight.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/LayerNorm_0/scale']))
+            b.norm2.bias.data.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/LayerNorm_2/bias']))
+            b.norm2.weight.data.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/LayerNorm_2/scale']))
+            ###############mlp weight######################
+            b.mlp.fc1.weight.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/MlpBlock_3/Dense_0/kernel']).t())
+            b.mlp.fc1.bias.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/MlpBlock_3/Dense_0/bias']).t())
+            b.mlp.fc2.weight.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/MlpBlock_3/Dense_1/kernel']).t())
+            b.mlp.fc2.bias.copy_(torch.from_numpy(weights[f'Transformer/encoderblock_{l}/MlpBlock_3/Dense_1/bias']).t())
+            ###############attention weight################
+            b.attn.qkv.weight.copy_(torch.cat([_n2p(weights[f'Transformer/encoderblock_{l}/MultiHeadDotProductAttention_1/{n}/kernel'], t=False).flatten(1).T for n in ('query', 'key', 'value')]))
+            b.attn.qkv.bias.copy_(torch.cat([_n2p(weights[f'Transformer/encoderblock_{l}/MultiHeadDotProductAttention_1/{n}/bias'], t=False).reshape(-1) for n in ('query', 'key', 'value')]))
+            b.attn.proj.weight.copy_(_n2p(weights[f'Transformer/encoderblock_{l}/MultiHeadDotProductAttention_1/out/kernel']).flatten(1))
+            b.attn.proj.bias.copy_(_n2p(weights[f'Transformer/encoderblock_{l}/MultiHeadDotProductAttention_1/out/bias']))
+    @torch.no_grad()
+    def SinusoidalEncoding(self, seq_len, d_model):
+        pos_table = np.array([
+            [pos / np.power(10000, 2 * i / d_model) for i in range(d_model)]
+            for pos in range(seq_len)])
+        pos_table[0, 0::2] = np.sin(pos_table[0, 0::2])
+        pos_table[0, 1::2] = np.cos(pos_table[0, 1::2])
+        return torch.FloatTensor(pos_table)
+    def forward(self,lms, rgb_fea, position_embeddings=None):
+    # def forward(self,rgb_fea, position_embeddings=None):
+        lms_emb = self.lms_proj(lms)
+        cat_fea = torch.cat((lms_emb, rgb_fea),dim=2)
+        x0 = self.emb_proj(cat_fea)
+        if position_embeddings is None:
+            x = torch.cat((self.cls_token.expand(x0.shape[0], -1, -1), x0),dim=1) + self.pos_embed_my
+        else:
+            cls_token_pe = torch.tile(self.SinusoidalEncoding(1,self.embed_dim), (x0.shape[0],1)).cuda()
+            position_embeddings = torch.from_numpy(position_embeddings).cuda()
+            x = torch.cat((self.cls_token.expand(x0.shape[0], -1, -1), x0), dim=1) + torch.cat((cls_token_pe[:, None, :], position_embeddings.expand(x0.shape[0], -1, -1)),dim=1)
+        x = self.norm_pre(x)
+        x = self.blocks(x)
+        x = self.norm(x)
+        v_fea = x[:, 0, :]
+        alphas = self.alpha(self.dropout(x0))
+        sum_fea = torch.cat((x0, v_fea[:,None,:].repeat(1, config['window_size'], 1)), dim=2)
+        betas = self.beta(self.dropout(sum_fea))
+        denomiter = torch.sum(alphas * betas, dim=1)
+        hx = torch.mul(sum_fea, alphas * betas).sum(1) / (denomiter+1e-8)
+        pred = self.pred(self.dropout2(hx))
+        # pred = self.pred(v_fea)
+        return pred
 if __name__ == '__main__':
     import dataProcess
     cnn_prh = '/home/exp-10086/Project/Emotion-FAN-master/pretrain_model/Resnet18_FER+_pytorch.pth.tar'
